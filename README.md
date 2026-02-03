@@ -83,3 +83,6 @@ A node started with `-miner` will attempt to mine a block whenever the mempool r
 
 These files are ignored by `.gitignore` and should not be committed.
 
+## License
+
+Licensed under either the MIT License or the Apache License, Version 2.0, at your option. See `LICENSE`, `LICENSE-MIT`, and `LICENSE-APACHE`.
