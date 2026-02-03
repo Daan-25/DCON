@@ -45,6 +45,30 @@ cmake -S . -B build -DOPENSSL_ROOT_DIR=/opt/homebrew/opt/openssl@3
 ./build/dcon printchain
 ```
 
+## Quick demo (single node)
+
+Below is a short, realistic demo session (example addresses will differ):
+
+```bash
+./build/dcon createwallet
+# New address: DABC...123
+
+./build/dcon createblockchain -address DABC...123
+# Blockchain created. Genesis reward sent to DABC...123
+
+./build/dcon createwallet
+# New address: DXYZ...987
+
+./build/dcon send -from DABC...123 -to DXYZ...987 -amount 10
+# Success! Block mined.
+
+./build/dcon getbalance -address DABC...123
+# Balance of DABC...123: 40 DCON
+
+./build/dcon getbalance -address DXYZ...987
+# Balance of DXYZ...987: 10 DCON
+```
+
 ## P2P + mempool
 
 Start multiple nodes in separate data directories:
