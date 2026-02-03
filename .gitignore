@@ -1,0 +1,16 @@
+# binaries
+/dcon
+
+# data files
+/dcon.db
+/wallets.dat
+
+# build artifacts
+/build/
+*.o
+
+# local node data
+/data/
+
+# macOS
+.DS_Store
