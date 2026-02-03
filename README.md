@@ -9,8 +9,10 @@ DCON is a minimal Bitcoin-like cryptocurrency in C++ with UTXO transactions, Pro
 - ECDSA signing/verification (secp256k1 via OpenSSL)
 - Base58Check-like addresses
 - Local persistence in `dcon.db` and `wallets.dat`
+- Wallet import/export (PEM)
 - Simple P2P gossip for blocks and transactions
 - In-memory mempool for pending transactions
+- Qt desktop wallet UI
 
 ## Requirements (macOS)
 
@@ -113,10 +115,24 @@ This repo includes a simple Qt desktop wallet UI that wraps the `dcon` CLI.
 
 ### Build
 
+Install Qt with Homebrew (macOS):
+
+```bash
+brew install qt
+```
+
 ```bash
 cmake -S wallet -B wallet/build
 cmake --build wallet/build
 ```
+
+If Qt is not found, pass the Homebrew path:
+
+```bash
+cmake -S wallet -B wallet/build -DCMAKE_PREFIX_PATH=/opt/homebrew/opt/qt
+```
+
+(Or `/usr/local/opt/qt` on Intel Macs.)
 
 Run the wallet:
 
