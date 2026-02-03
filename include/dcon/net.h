@@ -3,15 +3,27 @@
 #include <string>
 #include <vector>
 
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+using SocketHandle = SOCKET;
+#else
+using SocketHandle = int;
+#endif
+
 #include "dcon/types.h"
 
-bool ReadExact(int fd, unsigned char* buf, size_t len);
-bool WriteExact(int fd, const unsigned char* buf, size_t len);
-bool SendMessage(int fd, const std::string& type, const Bytes& payload);
-bool ReceiveMessage(int fd, std::string& type, Bytes& payload);
+bool InitSockets();
+void ShutdownSockets();
+void CloseSocket(SocketHandle socket);
 
-int ConnectToPeer(const std::string& address);
-int CreateServerSocket(int port);
+bool ReadExact(SocketHandle fd, unsigned char* buf, size_t len);
+bool WriteExact(SocketHandle fd, const unsigned char* buf, size_t len);
+bool SendMessage(SocketHandle fd, const std::string& type, const Bytes& payload);
+bool ReceiveMessage(SocketHandle fd, std::string& type, Bytes& payload);
+
+SocketHandle ConnectToPeer(const std::string& address);
+SocketHandle CreateServerSocket(int port);
 
 std::vector<std::string> SplitList(const std::string& list);
 void BroadcastToPeers(const std::vector<std::string>& peers,

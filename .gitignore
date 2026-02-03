@@ -9,6 +9,9 @@
 /build/
 *.o
 /wallet/build/
+*.obj
+*.exe
+*.dll
 
 # local node data
 /data/

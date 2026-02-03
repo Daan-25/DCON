@@ -64,6 +64,14 @@ static bool WriteTextFile(const std::string& path, const std::string& data) {
 }
 
 int main(int argc, char** argv) {
+  if (!InitSockets()) {
+    std::cerr << "Failed to initialize sockets\n";
+    return 1;
+  }
+  struct SocketGuard {
+    ~SocketGuard() { ShutdownSockets(); }
+  } socketGuard;
+
   if (argc < 2) {
     PrintUsage();
     return 1;

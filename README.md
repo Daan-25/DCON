@@ -1,6 +1,6 @@
 # DCON (C++)
 
-DCON is a minimal Bitcoin-like cryptocurrency in C++ with UTXO transactions, Proof-of-Work mining, and ECDSA signatures. It is a learning prototype that runs locally on macOS and Linux and includes a basic P2P layer with an in-memory mempool.
+DCON is a minimal Bitcoin-like cryptocurrency in C++ with UTXO transactions, Proof-of-Work mining, and ECDSA signatures. It is a learning prototype that runs locally on macOS, Linux, and Windows and includes a basic P2P layer with an in-memory mempool.
 
 ## Features
 
@@ -31,6 +31,14 @@ DCON is a minimal Bitcoin-like cryptocurrency in C++ with UTXO transactions, Pro
 ```bash
 sudo apt update
 sudo apt install build-essential cmake pkg-config libssl-dev
+```
+
+### Windows (MSYS2)
+
+Install MSYS2 and open the **MSYS2 MinGW64** shell, then:
+
+```bash
+pacman -Syu --needed mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake mingw-w64-x86_64-openssl mingw-w64-x86_64-qt6
 ```
 
 ## Build
@@ -160,6 +168,18 @@ Install Qt on Ubuntu/Debian:
 ```bash
 sudo apt update
 sudo apt install qt6-base-dev qt6-base-dev-tools
+```
+
+Install Qt on Windows (MSYS2 MinGW64):
+
+```bash
+pacman -Syu --needed mingw-w64-x86_64-qt6
+```
+
+If Qt is not found on Windows, pass:
+
+```bash
+cmake -S wallet -B wallet/build -DCMAKE_PREFIX_PATH=C:/msys64/mingw64
 ```
 
 Run the wallet:

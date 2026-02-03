@@ -1,14 +1,25 @@
 #include "dcon/node.h"
 
+#ifdef _WIN32
+#include <winsock2.h>
+#else
 #include <netinet/in.h>
 #include <sys/socket.h>
-#include <unistd.h>
+#endif
 
 #include <iostream>
 #include <thread>
 
 #include "dcon/crypto.h"
 #include "dcon/net.h"
+
+static bool IsValidSocket(SocketHandle socket) {
+#ifdef _WIN32
+  return socket != INVALID_SOCKET;
+#else
+  return socket >= 0;
+#endif
+}
 
 bool Node::LoadChain() {
   return Blockchain::Load(chain);
@@ -185,8 +196,8 @@ void Node::HandleMessage(const std::string& type, const Bytes& payload, int clie
 }
 
 void Node::Serve(int port) {
-  int server = CreateServerSocket(port);
-  if (server < 0) {
+  SocketHandle server = CreateServerSocket(port);
+  if (!IsValidSocket(server)) {
     std::cerr << "Failed to start server on port " << port << "\n";
     return;
   }
@@ -195,9 +206,13 @@ void Node::Serve(int port) {
 
   while (true) {
     sockaddr_in clientAddr {};
+  #ifdef _WIN32
+    int clientLen = sizeof(clientAddr);
+  #else
     socklen_t clientLen = sizeof(clientAddr);
-    int client = accept(server, reinterpret_cast<sockaddr*>(&clientAddr), &clientLen);
-    if (client < 0) {
+  #endif
+    SocketHandle client = accept(server, reinterpret_cast<sockaddr*>(&clientAddr), &clientLen);
+    if (!IsValidSocket(client)) {
       continue;
     }
     std::thread([this, client]() {
@@ -206,7 +221,7 @@ void Node::Serve(int port) {
       if (ReceiveMessage(client, type, payload)) {
         HandleMessage(type, payload, client);
       }
-      close(client);
+      CloseSocket(client);
     }).detach();
   }
 }

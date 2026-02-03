@@ -1,19 +1,54 @@
 #include "dcon/net.h"
 
+#ifdef _WIN32
+#else
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
 
 #include <cstring>
 
 #include "dcon/serialize.h"
 
-bool ReadExact(int fd, unsigned char* buf, size_t len) {
+bool InitSockets() {
+#ifdef _WIN32
+  WSADATA wsa;
+  return WSAStartup(MAKEWORD(2, 2), &wsa) == 0;
+#else
+  return true;
+#endif
+}
+
+void ShutdownSockets() {
+#ifdef _WIN32
+  WSACleanup();
+#endif
+}
+
+void CloseSocket(SocketHandle socket) {
+#ifdef _WIN32
+  closesocket(socket);
+#else
+  close(socket);
+#endif
+}
+
+static bool IsValidSocket(SocketHandle socket) {
+#ifdef _WIN32
+  return socket != INVALID_SOCKET;
+#else
+  return socket >= 0;
+#endif
+}
+
+bool ReadExact(SocketHandle fd, unsigned char* buf, size_t len) {
   size_t total = 0;
   while (total < len) {
-    ssize_t n = recv(fd, buf + total, len - total, 0);
+    auto n = recv(fd, reinterpret_cast<char*>(buf + total),
+                  static_cast<int>(len - total), 0);
     if (n <= 0) {
       return false;
     }
@@ -22,10 +57,11 @@ bool ReadExact(int fd, unsigned char* buf, size_t len) {
   return true;
 }
 
-bool WriteExact(int fd, const unsigned char* buf, size_t len) {
+bool WriteExact(SocketHandle fd, const unsigned char* buf, size_t len) {
   size_t total = 0;
   while (total < len) {
-    ssize_t n = send(fd, buf + total, len - total, 0);
+    auto n = send(fd, reinterpret_cast<const char*>(buf + total),
+                  static_cast<int>(len - total), 0);
     if (n <= 0) {
       return false;
     }
@@ -34,7 +70,7 @@ bool WriteExact(int fd, const unsigned char* buf, size_t len) {
   return true;
 }
 
-static bool ReadU32FromSocket(int fd, uint32_t& out) {
+static bool ReadU32FromSocket(SocketHandle fd, uint32_t& out) {
   unsigned char buf[4];
   if (!ReadExact(fd, buf, sizeof(buf))) {
     return false;
@@ -46,7 +82,7 @@ static bool ReadU32FromSocket(int fd, uint32_t& out) {
   return true;
 }
 
-static bool ReadBytesFromSocket(int fd, Bytes& out, uint32_t len) {
+static bool ReadBytesFromSocket(SocketHandle fd, Bytes& out, uint32_t len) {
   out.resize(len);
   if (len == 0) {
     return true;
@@ -54,14 +90,14 @@ static bool ReadBytesFromSocket(int fd, Bytes& out, uint32_t len) {
   return ReadExact(fd, out.data(), len);
 }
 
-bool SendMessage(int fd, const std::string& type, const Bytes& payload) {
+bool SendMessage(SocketHandle fd, const std::string& type, const Bytes& payload) {
   ByteWriter w;
   w.WriteString(type);
   w.WriteBytes(payload);
   return WriteExact(fd, w.data.data(), w.data.size());
 }
 
-bool ReceiveMessage(int fd, std::string& type, Bytes& payload) {
+bool ReceiveMessage(SocketHandle fd, std::string& type, Bytes& payload) {
   uint32_t typeLen = 0;
   if (!ReadU32FromSocket(fd, typeLen)) {
     return false;
@@ -102,11 +138,11 @@ static bool SplitHostPort(const std::string& input, std::string& host, int& port
   return port > 0;
 }
 
-int ConnectToPeer(const std::string& address) {
+SocketHandle ConnectToPeer(const std::string& address) {
   std::string host;
   int port = 0;
   if (!SplitHostPort(address, host, port)) {
-    return -1;
+    return static_cast<SocketHandle>(-1);
   }
 
   struct addrinfo hints {};
@@ -116,33 +152,37 @@ int ConnectToPeer(const std::string& address) {
   struct addrinfo* res = nullptr;
   std::string portStr = std::to_string(port);
   if (getaddrinfo(host.c_str(), portStr.c_str(), &hints, &res) != 0) {
-    return -1;
+    return static_cast<SocketHandle>(-1);
   }
 
-  int sock = -1;
+  SocketHandle sock = static_cast<SocketHandle>(-1);
   for (struct addrinfo* p = res; p != nullptr; p = p->ai_next) {
     sock = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
-    if (sock < 0) {
+    if (!IsValidSocket(sock)) {
       continue;
     }
     if (connect(sock, p->ai_addr, p->ai_addrlen) == 0) {
       break;
     }
-    close(sock);
-    sock = -1;
+    CloseSocket(sock);
+    sock = static_cast<SocketHandle>(-1);
   }
 
   freeaddrinfo(res);
   return sock;
 }
 
-int CreateServerSocket(int port) {
-  int sock = socket(AF_INET, SOCK_STREAM, 0);
-  if (sock < 0) {
-    return -1;
+SocketHandle CreateServerSocket(int port) {
+  SocketHandle sock = socket(AF_INET, SOCK_STREAM, 0);
+  if (!IsValidSocket(sock)) {
+    return static_cast<SocketHandle>(-1);
   }
   int yes = 1;
+#ifdef _WIN32
+  setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&yes), sizeof(yes));
+#else
   setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+#endif
 
   sockaddr_in addr {};
   addr.sin_family = AF_INET;
@@ -150,12 +190,12 @@ int CreateServerSocket(int port) {
   addr.sin_addr.s_addr = INADDR_ANY;
 
   if (bind(sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
-    close(sock);
-    return -1;
+    CloseSocket(sock);
+    return static_cast<SocketHandle>(-1);
   }
   if (listen(sock, 16) < 0) {
-    close(sock);
-    return -1;
+    CloseSocket(sock);
+    return static_cast<SocketHandle>(-1);
   }
   return sock;
 }
@@ -183,11 +223,11 @@ void BroadcastToPeers(const std::vector<std::string>& peers,
                       const std::string& type,
                       const Bytes& payload) {
   for (const auto& peer : peers) {
-    int sock = ConnectToPeer(peer);
-    if (sock < 0) {
+    SocketHandle sock = ConnectToPeer(peer);
+    if (!IsValidSocket(sock)) {
       continue;
     }
     SendMessage(sock, type, payload);
-    close(sock);
+    CloseSocket(sock);
   }
 }

@@ -24,3 +24,7 @@ add_executable(dcon
 
 target_include_directories(dcon PRIVATE include)
 target_link_libraries(dcon OpenSSL::Crypto Threads::Threads)
+
+if (WIN32)
+  target_link_libraries(dcon ws2_32)
+endif()
