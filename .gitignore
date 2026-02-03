@@ -8,6 +8,7 @@
 # build artifacts
 /build/
 *.o
+/wallet/build/
 
 # local node data
 /data/

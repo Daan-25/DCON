@@ -45,6 +45,15 @@ cmake -S . -B build -DOPENSSL_ROOT_DIR=/opt/homebrew/opt/openssl@3
 ./build/dcon printchain
 ```
 
+## Wallet import/export (CLI)
+
+```bash
+./build/dcon exportwallet -address <YOUR_ADDRESS> -out wallet.pem
+./build/dcon importwallet -in wallet.pem
+```
+
+Note: the exported PEM contains the private key. Keep it secure.
+
 ## Quick demo (single node)
 
 Below is a short, realistic demo session (example addresses will differ):
@@ -93,6 +102,30 @@ Broadcast a transaction to peers (without local mining):
 ```
 
 A node started with `-miner` will attempt to mine a block whenever the mempool receives transactions, and will broadcast the block afterward.
+
+## Desktop wallet (Qt)
+
+This repo includes a simple Qt desktop wallet UI that wraps the `dcon` CLI.
+
+### Requirements
+
+- Qt 6 (Widgets)
+
+### Build
+
+```bash
+cmake -S wallet -B wallet/build
+cmake --build wallet/build
+```
+
+Run the wallet:
+
+```bash
+./wallet/build/dcon-wallet
+```
+
+Inside the app, set the path to your `dcon` binary (default resolves to `build/dcon` in the repo root) and optionally choose a data directory.
+The wallet UI also supports importing and exporting wallet files (PEM).
 
 ## Notes and limitations
 

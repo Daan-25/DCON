@@ -17,6 +17,8 @@ static void PrintUsage() {
   std::cout << "  [global] -datadir DIR\n";
   std::cout << "  createwallet\n";
   std::cout << "  listaddresses\n";
+  std::cout << "  exportwallet -address ADDRESS -out FILE\n";
+  std::cout << "  importwallet -in FILE\n";
   std::cout << "  createblockchain -address ADDRESS\n";
   std::cout << "  getbalance -address ADDRESS\n";
   std::cout << "  send -from FROM -to TO -amount N [-mine true|false] [-peers host:port,...]\n";
@@ -44,6 +46,20 @@ static bool GetBoolFlag(int argc, char** argv, const std::string& flag, bool def
     }
   }
   return def;
+}
+
+static bool ReadTextFile(const std::string& path, std::string& out) {
+  Bytes data;
+  if (!ReadFileBytes(path, data)) {
+    return false;
+  }
+  out.assign(data.begin(), data.end());
+  return true;
+}
+
+static bool WriteTextFile(const std::string& path, const std::string& data) {
+  Bytes bytes(data.begin(), data.end());
+  return WriteFileBytes(path, bytes);
 }
 
 int main(int argc, char** argv) {
@@ -90,6 +106,67 @@ int main(int argc, char** argv) {
     std::cout << "Addresses:\n";
     for (const auto& kv : wallets.items) {
       std::cout << "  " << kv.first << "\n";
+    }
+    return 0;
+  }
+
+  if (command == "exportwallet") {
+    std::string address = GetArgValue(argc, argv, "-address");
+    std::string outFile = GetArgValue(argc, argv, "-out");
+    if (address.empty() || outFile.empty()) {
+      std::cerr << "-address and -out are required\n";
+      return 1;
+    }
+    Wallets wallets;
+    if (!wallets.LoadFromFile()) {
+      std::cerr << "Failed to load wallets\n";
+      return 1;
+    }
+    Wallet* wallet = wallets.GetWallet(address);
+    if (!wallet) {
+      std::cerr << "Wallet not found for address\n";
+      return 1;
+    }
+    if (!WriteTextFile(outFile, wallet->ToPEM())) {
+      std::cerr << "Failed to write file\n";
+      return 1;
+    }
+    std::cout << "Exported wallet: " << address << " -> " << outFile << "\n";
+    return 0;
+  }
+
+  if (command == "importwallet") {
+    std::string inFile = GetArgValue(argc, argv, "-in");
+    if (inFile.empty()) {
+      std::cerr << "-in is required\n";
+      return 1;
+    }
+    std::string pem;
+    if (!ReadTextFile(inFile, pem)) {
+      std::cerr << "Failed to read file\n";
+      return 1;
+    }
+    Wallets wallets;
+    if (!wallets.LoadFromFile()) {
+      std::cerr << "Failed to load wallets\n";
+      return 1;
+    }
+    auto wallet = Wallet::FromPEM(pem);
+    if (!wallet) {
+      std::cerr << "Invalid wallet file\n";
+      return 1;
+    }
+    std::string address = wallet->GetAddress();
+    bool exists = wallets.items.find(address) != wallets.items.end();
+    if (!exists) {
+      wallets.items[address] = std::move(wallet);
+      if (!wallets.SaveToFile()) {
+        std::cerr << "Failed to save wallets\n";
+        return 1;
+      }
+      std::cout << "Imported wallet: " << address << "\n";
+    } else {
+      std::cout << "Wallet already exists: " << address << "\n";
     }
     return 0;
   }
