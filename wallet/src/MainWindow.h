@@ -6,6 +6,7 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QProcess>
+#include <QTableWidget>
 #include <QTextEdit>
 #include <QWidget>
 
@@ -23,6 +24,9 @@ class MainWindow : public QWidget {
   QLineEdit* chainAddressEdit;
   QLineEdit* balanceAddressEdit;
   QLineEdit* balanceValueEdit;
+
+  QLineEdit* historyAddressEdit;
+  QTableWidget* historyTable;
 
   QLineEdit* sendFromEdit;
   QLineEdit* sendToEdit;
@@ -48,6 +52,7 @@ class MainWindow : public QWidget {
 
   void handleListAddresses(const QString& output);
   void handleBalanceOutput(const QString& output);
+  void handleHistoryOutput(const QString& output);
 
   void startNode();
   void stopNode();

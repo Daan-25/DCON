@@ -21,6 +21,7 @@ static void PrintUsage() {
   std::cout << "  importwallet -in FILE\n";
   std::cout << "  createblockchain -address ADDRESS\n";
   std::cout << "  getbalance -address ADDRESS\n";
+  std::cout << "  txhistory -address ADDRESS\n";
   std::cout << "  send -from FROM -to TO -amount N [-mine true|false] [-peers host:port,...]\n";
   std::cout << "  startnode -port PORT [-peers host:port,...] [-miner ADDRESS]\n";
   std::cout << "  printchain\n";
@@ -209,6 +210,34 @@ int main(int argc, char** argv) {
       balance += out.value;
     }
     std::cout << "Balance of " << address << ": " << balance << " DCON\n";
+    return 0;
+  }
+
+  if (command == "txhistory") {
+    std::string address = GetArgValue(argc, argv, "-address");
+    if (address.empty()) {
+      std::cerr << "-address is required\n";
+      return 1;
+    }
+    if (!ValidateAddress(address)) {
+      std::cerr << "Invalid address\n";
+      return 1;
+    }
+    Blockchain bc;
+    if (!Blockchain::Load(bc)) {
+      std::cerr << "Blockchain not found. Create it first.\n";
+      return 1;
+    }
+    Bytes decoded = Base58Decode(address);
+    Bytes pubKeyHash(decoded.begin() + 1, decoded.end() - 4);
+    auto history = bc.GetTxHistory(pubKeyHash);
+    std::cout << "History for " << address << ":\n";
+    for (const auto& entry : history) {
+      int64_t net = entry.received - entry.sent;
+      std::cout << "TX " << entry.height << " " << entry.timestamp << " "
+                << entry.txid << " " << entry.received << " "
+                << entry.sent << " " << net << "\n";
+    }
     return 0;
   }
 

@@ -10,6 +10,7 @@ DCON is a minimal Bitcoin-like cryptocurrency in C++ with UTXO transactions, Pro
 - Base58Check-like addresses
 - Local persistence in `dcon.db` and `wallets.dat`
 - Wallet import/export (PEM)
+- Transaction history (CLI + UI)
 - Simple P2P gossip for blocks and transactions
 - In-memory mempool for pending transactions
 - Qt desktop wallet UI
@@ -56,8 +57,15 @@ cmake -S . -B build -DOPENSSL_ROOT_DIR=/opt/homebrew/opt/openssl@3
 ./build/dcon createwallet
 ./build/dcon createblockchain -address <YOUR_ADDRESS>
 ./build/dcon getbalance -address <YOUR_ADDRESS>
+./build/dcon txhistory -address <YOUR_ADDRESS>
 ./build/dcon send -from <FROM_ADDR> -to <TO_ADDR> -amount 10
 ./build/dcon printchain
+```
+
+## Transaction history (CLI)
+
+```bash
+./build/dcon txhistory -address <YOUR_ADDRESS>
 ```
 
 ## Wallet import/export (CLI)
@@ -161,7 +169,7 @@ Run the wallet:
 ```
 
 Inside the app, set the path to your `dcon` binary (default resolves to `build/dcon` in the repo root) and optionally choose a data directory.
-The wallet UI also supports importing and exporting wallet files (PEM).
+The wallet UI also supports importing/exporting wallet files (PEM) and viewing transaction history.
 
 ## Notes and limitations
 

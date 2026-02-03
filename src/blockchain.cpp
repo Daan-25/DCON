@@ -224,6 +224,51 @@ int64_t Blockchain::FindSpendableOutputs(
   return accumulated;
 }
 
+std::vector<Blockchain::TxHistoryEntry> Blockchain::GetTxHistory(
+    const Bytes& pubKeyHash) const {
+  std::vector<TxHistoryEntry> history;
+
+  for (const auto& block : blocks) {
+    for (const auto& tx : block.transactions) {
+      int64_t received = 0;
+      int64_t sent = 0;
+
+      for (const auto& out : tx.vout) {
+        if (out.IsLockedWithKey(pubKeyHash)) {
+          received += out.value;
+        }
+      }
+
+      if (!tx.IsCoinbase()) {
+        for (const auto& in : tx.vin) {
+          if (!in.UsesKey(pubKeyHash)) {
+            continue;
+          }
+          Transaction prev;
+          if (!FindTransaction(in.txid, prev)) {
+            continue;
+          }
+          if (in.vout >= 0 && static_cast<size_t>(in.vout) < prev.vout.size()) {
+            sent += prev.vout[static_cast<size_t>(in.vout)].value;
+          }
+        }
+      }
+
+      if (received > 0 || sent > 0) {
+        TxHistoryEntry entry;
+        entry.height = block.height;
+        entry.timestamp = block.timestamp;
+        entry.txid = BytesToHex(tx.id);
+        entry.received = received;
+        entry.sent = sent;
+        history.push_back(entry);
+      }
+    }
+  }
+
+  return history;
+}
+
 bool ValidateChain(const Blockchain& bc) {
   if (bc.blocks.empty()) {
     return false;

@@ -4,16 +4,19 @@
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
+#include <QAbstractItemView>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QGridLayout>
 #include <QGroupBox>
+#include <QHeaderView>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSplitter>
+#include <QTableWidgetItem>
 #include <QVBoxLayout>
 
 #include <memory>
@@ -179,6 +182,27 @@ void MainWindow::setupUi() {
   chainLayout->addLayout(balanceRow);
 
   controlsLayout->addWidget(chainGroup);
+
+  // Transactions
+  auto* historyGroup = new QGroupBox("Transactions");
+  auto* historyLayout = new QVBoxLayout(historyGroup);
+  auto* historyRow = new QHBoxLayout();
+  historyAddressEdit = new QLineEdit();
+  historyAddressEdit->setPlaceholderText("Address for history");
+  auto* historyBtn = new QPushButton("Load History");
+  historyRow->addWidget(historyAddressEdit);
+  historyRow->addWidget(historyBtn);
+  historyLayout->addLayout(historyRow);
+
+  historyTable = new QTableWidget(0, 6);
+  historyTable->setHorizontalHeaderLabels(
+      {"Height", "Time", "TxID", "Received", "Sent", "Net"});
+  historyTable->horizontalHeader()->setStretchLastSection(true);
+  historyTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+  historyTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+  historyLayout->addWidget(historyTable);
+
+  controlsLayout->addWidget(historyGroup);
 
   // Send
   auto* sendGroup = new QGroupBox("Send");
@@ -349,6 +373,20 @@ void MainWindow::setupUi() {
     runCommand(args, [this](const QString& output) { handleBalanceOutput(output); });
   });
 
+  connect(historyBtn, &QPushButton::clicked, this, [this]() {
+    QString address = historyAddressEdit->text().trimmed();
+    if (address.isEmpty()) {
+      QMessageBox::warning(this, "Missing address",
+                           "Please enter an address.");
+      return;
+    }
+    QStringList args = {"txhistory", "-address", address};
+    if (!dataDir().isEmpty()) {
+      args << "-datadir" << dataDir();
+    }
+    runCommand(args, [this](const QString& output) { handleHistoryOutput(output); });
+  });
+
   connect(sendBtn, &QPushButton::clicked, this, [this]() {
     QString from = sendFromEdit->text().trimmed();
     QString to = sendToEdit->text().trimmed();
@@ -392,6 +430,9 @@ void MainWindow::setupUi() {
     if (exportAddressEdit->text().isEmpty()) {
       exportAddressEdit->setText(address);
     }
+    if (historyAddressEdit->text().isEmpty()) {
+      historyAddressEdit->setText(address);
+    }
   });
 }
 
@@ -432,6 +473,39 @@ void MainWindow::handleBalanceOutput(const QString& output) {
         return;
       }
     }
+  }
+}
+
+void MainWindow::handleHistoryOutput(const QString& output) {
+  historyTable->setRowCount(0);
+  QStringList lines = output.split('\n', Qt::SkipEmptyParts);
+  for (const QString& line : lines) {
+    if (!line.startsWith("TX ")) {
+      continue;
+    }
+    QStringList parts = line.split(' ', Qt::SkipEmptyParts);
+    if (parts.size() < 7) {
+      continue;
+    }
+    int row = historyTable->rowCount();
+    historyTable->insertRow(row);
+
+    QString height = parts[1];
+    QString timestamp = parts[2];
+    QString txid = parts[3];
+    QString received = parts[4];
+    QString sent = parts[5];
+    QString net = parts[6];
+
+    QDateTime dt = QDateTime::fromSecsSinceEpoch(timestamp.toLongLong());
+    QString timeText = dt.toString("yyyy-MM-dd HH:mm:ss");
+
+    historyTable->setItem(row, 0, new QTableWidgetItem(height));
+    historyTable->setItem(row, 1, new QTableWidgetItem(timeText));
+    historyTable->setItem(row, 2, new QTableWidgetItem(txid));
+    historyTable->setItem(row, 3, new QTableWidgetItem(received));
+    historyTable->setItem(row, 4, new QTableWidgetItem(sent));
+    historyTable->setItem(row, 5, new QTableWidgetItem(net));
   }
 }
 
