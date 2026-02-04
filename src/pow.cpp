@@ -68,3 +68,10 @@ bool ProofOfWork::Validate() const {
   Bytes hash = Sha256(data);
   return IsPowHashValid(hash);
 }
+
+uint64_t BlockWork() {
+  if (kTargetBits >= 63) {
+    return std::numeric_limits<uint64_t>::max();
+  }
+  return 1ULL << kTargetBits;
+}

@@ -7,6 +7,7 @@
 
 Bytes PreparePowData(const Block& block, int64_t nonce);
 bool IsPowHashValid(const Bytes& hash);
+uint64_t BlockWork();
 
 struct ProofOfWork {
   Block* block;

@@ -7,11 +7,14 @@
 #include <sys/socket.h>
 #endif
 
+#include <algorithm>
 #include <iostream>
+#include <limits>
 #include <thread>
 
 #include "dcon/crypto.h"
 #include "dcon/net.h"
+#include "dcon/pow.h"
 
 static bool IsValidSocket(SocketHandle socket) {
 #ifdef _WIN32
@@ -22,7 +25,59 @@ static bool IsValidSocket(SocketHandle socket) {
 }
 
 bool Node::LoadChain() {
-  return Blockchain::Load(chain);
+  if (!Blockchain::Load(chain)) {
+    return false;
+  }
+  if (!ValidateChain(chain)) {
+    return false;
+  }
+  BuildIndexFromChain();
+  return true;
+}
+
+uint64_t Node::GetBlockWork() const {
+  return BlockWork();
+}
+
+uint64_t Node::AddWork(uint64_t a, uint64_t b) const {
+  if (std::numeric_limits<uint64_t>::max() - a < b) {
+    return std::numeric_limits<uint64_t>::max();
+  }
+  return a + b;
+}
+
+void Node::BuildIndexFromChain() {
+  blockIndex.clear();
+  totalWork.clear();
+  orphansByPrev.clear();
+  bestTip.clear();
+  bestTotalWork = 0;
+
+  uint64_t cumulative = 0;
+  for (const auto& block : chain.blocks) {
+    std::string hashKey = BytesToHex(block.hash);
+    std::string prevKey = BytesToHex(block.prevBlockHash);
+    cumulative = AddWork(cumulative, GetBlockWork());
+    blockIndex[hashKey] = block;
+    totalWork[hashKey] = cumulative;
+    bestTip = hashKey;
+    bestTotalWork = cumulative;
+  }
+}
+
+bool Node::BuildChainFromTip(const std::string& tip, std::vector<Block>& out) const {
+  out.clear();
+  std::string current = tip;
+  while (!current.empty()) {
+    auto it = blockIndex.find(current);
+    if (it == blockIndex.end()) {
+      return false;
+    }
+    out.push_back(it->second);
+    current = BytesToHex(it->second.prevBlockHash);
+  }
+  std::reverse(out.begin(), out.end());
+  return !out.empty();
 }
 
 void Node::Broadcast(const std::string& type, const Bytes& payload) {
@@ -95,52 +150,96 @@ void Node::OnTx(const Transaction& tx) {
 }
 
 void Node::OnBlock(const Block& block) {
-  bool added = false;
+  std::vector<Block> orphanFollowUps;
+  bool accepted = false;
+  bool newBest = false;
   bool needSync = false;
+
+  std::string hashKey = BytesToHex(block.hash);
+  std::string prevKey = BytesToHex(block.prevBlockHash);
+
   {
     std::lock_guard<std::mutex> lock(mutex);
-    if (chain.HasBlock(block.hash)) {
+    if (blockIndex.find(hashKey) != blockIndex.end()) {
       return;
     }
-    if (chain.blocks.empty()) {
-      if (ValidateBlock(block, nullptr)) {
-        chain.blocks.push_back(block);
-        chain.Save();
-        RemoveMempoolTxs(block);
-        added = true;
-      } else {
+
+    if (!prevKey.empty() && blockIndex.find(prevKey) == blockIndex.end()) {
+      orphansByPrev[prevKey].push_back(block);
+      needSync = true;
+    } else {
+      const Block* parent = nullptr;
+      uint64_t parentWork = 0;
+      if (!prevKey.empty()) {
+        parent = &blockIndex[prevKey];
+        parentWork = totalWork[prevKey];
+      }
+
+      if (!ValidateBlock(block, parent)) {
         return;
       }
-    } else {
-      const Block& last = chain.blocks.back();
-      if (block.height == last.height + 1 &&
-          block.prevBlockHash == last.hash &&
-          ValidateBlock(block, &last)) {
-        bool txOK = true;
-        for (const auto& tx : block.transactions) {
-          if (!chain.VerifyTransaction(tx)) {
-            txOK = false;
-            break;
-          }
+
+      std::vector<Block> parentChain;
+      if (!prevKey.empty()) {
+        if (!BuildChainFromTip(prevKey, parentChain)) {
+          return;
         }
-        if (txOK) {
-          chain.blocks.push_back(block);
-          chain.Save();
-          RemoveMempoolTxs(block);
-          added = true;
+      }
+      Blockchain temp;
+      temp.blocks = parentChain;
+      for (const auto& tx : block.transactions) {
+        if (!temp.VerifyTransaction(tx)) {
+          return;
         }
-      } else if (block.height > last.height + 1) {
-        needSync = true;
+      }
+
+      uint64_t work = AddWork(parentWork, GetBlockWork());
+      blockIndex[hashKey] = block;
+      totalWork[hashKey] = work;
+      accepted = true;
+
+      if (work > bestTotalWork) {
+        bestTotalWork = work;
+        bestTip = hashKey;
+        newBest = true;
+      }
+
+      auto orphanIt = orphansByPrev.find(hashKey);
+      if (orphanIt != orphansByPrev.end()) {
+        orphanFollowUps = orphanIt->second;
+        orphansByPrev.erase(orphanIt);
       }
     }
   }
 
-  if (added) {
-    Broadcast("block", block.Serialize());
-    return;
-  }
   if (needSync) {
     RequestBlocks();
+    return;
+  }
+
+  if (newBest) {
+    std::vector<Block> newChain;
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      if (!BuildChainFromTip(bestTip, newChain)) {
+        return;
+      }
+    }
+    Blockchain candidate;
+    candidate.blocks = newChain;
+    if (ValidateChain(candidate)) {
+      std::lock_guard<std::mutex> lock(mutex);
+      chain.ReplaceWith(candidate);
+      mempool.clear();
+    }
+  }
+
+  if (accepted) {
+    Broadcast("block", block.Serialize());
+  }
+
+  for (const auto& orphan : orphanFollowUps) {
+    OnBlock(orphan);
   }
 }
 
@@ -153,12 +252,18 @@ void Node::OnBlocksPayload(const Bytes& payload) {
     return;
   }
 
+  uint64_t incomingWork = 0;
+  for (size_t i = 0; i < incoming.blocks.size(); ++i) {
+    incomingWork = AddWork(incomingWork, GetBlockWork());
+  }
+
   bool replaced = false;
   {
     std::lock_guard<std::mutex> lock(mutex);
-    if (incoming.blocks.size() > chain.blocks.size()) {
+    if (incomingWork > bestTotalWork) {
       chain.ReplaceWith(incoming);
       mempool.clear();
+      BuildIndexFromChain();
       replaced = true;
     }
   }
