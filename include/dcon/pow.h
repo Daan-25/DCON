@@ -6,8 +6,8 @@
 #include "dcon/types.h"
 
 Bytes PreparePowData(const Block& block, int64_t nonce);
-bool IsPowHashValid(const Bytes& hash);
-uint64_t BlockWork();
+bool IsPowHashValid(const Bytes& hash, int targetBits);
+uint64_t BlockWork(int targetBits);
 
 struct ProofOfWork {
   Block* block;

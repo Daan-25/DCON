@@ -342,6 +342,7 @@ int main(int argc, char** argv) {
       std::cout << "--- Block " << block.height << " ---\n";
       std::cout << "Hash: " << BytesToHex(block.hash) << "\n";
       std::cout << "Prev: " << BytesToHex(block.prevBlockHash) << "\n";
+      std::cout << "Target bits: " << block.targetBits << "\n";
       ProofOfWork pow(const_cast<Block*>(&block));
       std::cout << "PoW valid: " << (pow.Validate() ? "true" : "false") << "\n";
       for (const auto& tx : block.transactions) {

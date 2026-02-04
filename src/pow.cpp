@@ -2,18 +2,17 @@
 
 #include <limits>
 
-#include "dcon/constants.h"
 #include "dcon/crypto.h"
 
-bool IsPowHashValid(const Bytes& hash) {
+bool IsPowHashValid(const Bytes& hash, int targetBits) {
   int zeros = 0;
   for (unsigned char b : hash) {
     for (int i = 7; i >= 0; --i) {
       if (b & (1 << i)) {
-        return zeros >= kTargetBits;
+        return zeros >= targetBits;
       }
       zeros++;
-      if (zeros >= kTargetBits) {
+      if (zeros >= targetBits) {
         return true;
       }
     }
@@ -36,7 +35,7 @@ Bytes PreparePowData(const Block& block, int64_t nonce) {
   };
 
   appendI64(block.timestamp);
-  appendI64(kTargetBits);
+  appendI64(block.targetBits);
   appendI64(nonce);
   appendI64(block.height);
 
@@ -54,7 +53,7 @@ bool ProofOfWork::Run() {
   for (int64_t nonce = 0; nonce < maxNonce; ++nonce) {
     Bytes data = PrepareData(nonce);
     Bytes hash = Sha256(data);
-    if (IsPowHashValid(hash)) {
+    if (IsPowHashValid(hash, block->targetBits)) {
       block->hash = hash;
       block->nonce = nonce;
       return true;
@@ -66,12 +65,12 @@ bool ProofOfWork::Run() {
 bool ProofOfWork::Validate() const {
   Bytes data = PrepareData(block->nonce);
   Bytes hash = Sha256(data);
-  return IsPowHashValid(hash);
+  return IsPowHashValid(hash, block->targetBits);
 }
 
-uint64_t BlockWork() {
-  if (kTargetBits >= 63) {
+uint64_t BlockWork(int targetBits) {
+  if (targetBits >= 63) {
     return std::numeric_limits<uint64_t>::max();
   }
-  return 1ULL << kTargetBits;
+  return 1ULL << targetBits;
 }

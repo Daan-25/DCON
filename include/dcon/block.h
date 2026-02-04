@@ -13,6 +13,7 @@ struct Block {
   Bytes hash;
   int64_t nonce = 0;
   int height = 0;
+  int targetBits = 0;
 
   Bytes HashTransactions() const;
   Bytes Serialize() const;
@@ -20,6 +21,6 @@ struct Block {
 };
 
 Block NewBlock(const std::vector<Transaction>& txs, const Bytes& prevHash,
-               int height);
+               int height, int targetBits);
 
 bool ValidateBlock(const Block& block, const Block* prev);

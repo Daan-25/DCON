@@ -56,7 +56,7 @@ bool Blockchain::Create(const std::string& address) {
     return false;
   }
   Transaction coinbase = NewCoinbaseTX(address, kGenesisData);
-  Block genesis = NewBlock({coinbase}, Bytes{}, 0);
+  Block genesis = NewBlock({coinbase}, Bytes{}, 0, kInitialTargetBits);
   blocks.clear();
   blocks.push_back(genesis);
   return Save();
@@ -70,7 +70,7 @@ bool Blockchain::AddBlock(const std::vector<Transaction>& txs) {
   }
 
   const Block& last = blocks.back();
-  Block newBlock = NewBlock(txs, last.hash, last.height + 1);
+  Block newBlock = NewBlock(txs, last.hash, last.height + 1, NextTargetBits());
   blocks.push_back(newBlock);
   return Save();
 }
@@ -269,11 +269,47 @@ std::vector<Blockchain::TxHistoryEntry> Blockchain::GetTxHistory(
   return history;
 }
 
+int Blockchain::NextTargetBits() const {
+  if (blocks.empty()) {
+    return kInitialTargetBits;
+  }
+  const Block& last = blocks.back();
+  if ((last.height + 1) % kDifficultyInterval != 0) {
+    return last.targetBits == 0 ? kInitialTargetBits : last.targetBits;
+  }
+
+  int idx = static_cast<int>(blocks.size()) - kDifficultyInterval;
+  if (idx < 0) {
+    idx = 0;
+  }
+  const Block& adjust = blocks[static_cast<size_t>(idx)];
+  int64_t actual = last.timestamp - adjust.timestamp;
+  int64_t expected = static_cast<int64_t>(kTargetSpacingSeconds) * kDifficultyInterval;
+
+  int next = last.targetBits == 0 ? kInitialTargetBits : last.targetBits;
+  if (actual < expected / 2) {
+    next += 1;
+  } else if (actual > expected * 2) {
+    next -= 1;
+  }
+
+  if (next < kMinTargetBits) {
+    next = kMinTargetBits;
+  }
+  if (next > kMaxTargetBits) {
+    next = kMaxTargetBits;
+  }
+  return next;
+}
+
 bool ValidateChain(const Blockchain& bc) {
   if (bc.blocks.empty()) {
     return false;
   }
   if (!ValidateBlock(bc.blocks[0], nullptr)) {
+    return false;
+  }
+  if (bc.blocks[0].targetBits != kInitialTargetBits) {
     return false;
   }
   Blockchain tmp;
@@ -282,6 +318,10 @@ bool ValidateChain(const Blockchain& bc) {
   for (size_t i = 1; i < bc.blocks.size(); ++i) {
     const Block& block = bc.blocks[i];
     if (!ValidateBlock(block, &tmp.blocks.back())) {
+      return false;
+    }
+    int expectedBits = tmp.NextTargetBits();
+    if (block.targetBits != expectedBits) {
       return false;
     }
     for (const auto& tx : block.transactions) {

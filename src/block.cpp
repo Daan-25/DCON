@@ -2,6 +2,7 @@
 
 #include <chrono>
 
+#include "dcon/constants.h"
 #include "dcon/crypto.h"
 #include "dcon/pow.h"
 #include "dcon/serialize.h"
@@ -19,6 +20,7 @@ Bytes Block::Serialize() const {
   w.WriteI64(timestamp);
   w.WriteI64(height);
   w.WriteI64(nonce);
+  w.WriteI64(targetBits);
   w.WriteBytes(prevBlockHash);
   w.WriteBytes(hash);
 
@@ -39,6 +41,9 @@ Block Block::Deserialize(const Bytes& data) {
   r.ReadI64(height);
   b.height = static_cast<int>(height);
   r.ReadI64(b.nonce);
+  int64_t bits = 0;
+  r.ReadI64(bits);
+  b.targetBits = static_cast<int>(bits);
   r.ReadBytes(b.prevBlockHash);
   r.ReadBytes(b.hash);
 
@@ -56,18 +61,22 @@ Block Block::Deserialize(const Bytes& data) {
 }
 
 Block NewBlock(const std::vector<Transaction>& txs, const Bytes& prevHash,
-               int height) {
+               int height, int targetBits) {
   Block b;
   b.timestamp = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
   b.transactions = txs;
   b.prevBlockHash = prevHash;
   b.height = height;
+  b.targetBits = targetBits;
   ProofOfWork pow(&b);
   pow.Run();
   return b;
 }
 
 bool ValidateBlock(const Block& block, const Block* prev) {
+  if (block.targetBits < kMinTargetBits || block.targetBits > kMaxTargetBits) {
+    return false;
+  }
   if (prev) {
     if (block.height != prev->height + 1) {
       return false;
@@ -84,9 +93,12 @@ bool ValidateBlock(const Block& block, const Block* prev) {
     }
   }
 
+  if (block.targetBits <= 0) {
+    return false;
+  }
   Bytes computed = Sha256(PreparePowData(block, block.nonce));
   if (computed != block.hash) {
     return false;
   }
-  return IsPowHashValid(computed);
+  return IsPowHashValid(computed, block.targetBits);
 }

@@ -14,6 +14,7 @@ DCON is a minimal Bitcoin-like cryptocurrency in C++ with UTXO transactions, Pro
 - Simple P2P gossip for blocks and transactions
 - In-memory mempool for pending transactions
 - Qt desktop wallet UI
+- Difficulty adjustment + most-work chain selection
 
 ## Requirements
 
@@ -194,8 +195,9 @@ The wallet UI also supports importing/exporting wallet files (PEM) and viewing t
 ## Notes and limitations
 
 - This is a minimal prototype, not production-ready.
-- P2P is basic: no peer discovery, no full fork selection by total work, and no mempool policies.
-- Fixed difficulty and simple persistence.
+- P2P is basic: no peer discovery and no mempool policies.
+- Difficulty adjusts every `kDifficultyInterval` blocks using block timestamps; persistence is simple.
+- If you upgrade from an older version, you may need to delete `dcon.db` because the block format changed.
 
 ## Files created at runtime
 

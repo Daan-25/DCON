@@ -29,7 +29,6 @@ class Node {
 
   void BuildIndexFromChain();
   bool BuildChainFromTip(const std::string& tip, std::vector<Block>& out) const;
-  uint64_t GetBlockWork() const;
   uint64_t AddWork(uint64_t a, uint64_t b) const;
 
   void Broadcast(const std::string& type, const Bytes& payload);

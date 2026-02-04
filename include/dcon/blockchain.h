@@ -45,6 +45,7 @@ class Blockchain {
                                std::unordered_map<std::string, std::vector<int64_t>>& out) const;
 
   std::vector<TxHistoryEntry> GetTxHistory(const Bytes& pubKeyHash) const;
+  int NextTargetBits() const;
 };
 
 bool ValidateChain(const Blockchain& bc);

@@ -13,6 +13,7 @@
 #include <thread>
 
 #include "dcon/crypto.h"
+#include "dcon/constants.h"
 #include "dcon/net.h"
 #include "dcon/pow.h"
 
@@ -24,6 +25,20 @@ static bool IsValidSocket(SocketHandle socket) {
 #endif
 }
 
+static std::unordered_map<std::string, Transaction> CollectNonCoinbaseTxs(
+    const Blockchain& chain) {
+  std::unordered_map<std::string, Transaction> out;
+  for (const auto& block : chain.blocks) {
+    for (const auto& tx : block.transactions) {
+      if (tx.IsCoinbase()) {
+        continue;
+      }
+      out[BytesToHex(tx.id)] = tx;
+    }
+  }
+  return out;
+}
+
 bool Node::LoadChain() {
   if (!Blockchain::Load(chain)) {
     return false;
@@ -33,10 +48,6 @@ bool Node::LoadChain() {
   }
   BuildIndexFromChain();
   return true;
-}
-
-uint64_t Node::GetBlockWork() const {
-  return BlockWork();
 }
 
 uint64_t Node::AddWork(uint64_t a, uint64_t b) const {
@@ -57,7 +68,7 @@ void Node::BuildIndexFromChain() {
   for (const auto& block : chain.blocks) {
     std::string hashKey = BytesToHex(block.hash);
     std::string prevKey = BytesToHex(block.prevBlockHash);
-    cumulative = AddWork(cumulative, GetBlockWork());
+    cumulative = AddWork(cumulative, BlockWork(block.targetBits));
     blockIndex[hashKey] = block;
     totalWork[hashKey] = cumulative;
     bestTip = hashKey;
@@ -179,6 +190,21 @@ void Node::OnBlock(const Block& block) {
         return;
       }
 
+      if (parent) {
+        std::vector<Block> parentChain;
+        if (!BuildChainFromTip(prevKey, parentChain)) {
+          return;
+        }
+        Blockchain temp;
+        temp.blocks = parentChain;
+        int expectedBits = temp.NextTargetBits();
+        if (block.targetBits != expectedBits) {
+          return;
+        }
+      } else if (block.targetBits != kInitialTargetBits) {
+        return;
+      }
+
       std::vector<Block> parentChain;
       if (!prevKey.empty()) {
         if (!BuildChainFromTip(prevKey, parentChain)) {
@@ -193,7 +219,7 @@ void Node::OnBlock(const Block& block) {
         }
       }
 
-      uint64_t work = AddWork(parentWork, GetBlockWork());
+      uint64_t work = AddWork(parentWork, BlockWork(block.targetBits));
       blockIndex[hashKey] = block;
       totalWork[hashKey] = work;
       accepted = true;
@@ -229,8 +255,19 @@ void Node::OnBlock(const Block& block) {
     candidate.blocks = newChain;
     if (ValidateChain(candidate)) {
       std::lock_guard<std::mutex> lock(mutex);
+      Blockchain oldChain = chain;
+      auto oldTxs = CollectNonCoinbaseTxs(oldChain);
+      auto newTxs = CollectNonCoinbaseTxs(candidate);
       chain.ReplaceWith(candidate);
       mempool.clear();
+      for (const auto& kv : oldTxs) {
+        if (newTxs.find(kv.first) != newTxs.end()) {
+          continue;
+        }
+        if (chain.VerifyTransaction(kv.second)) {
+          mempool[kv.first] = kv.second;
+        }
+      }
     }
   }
 
@@ -253,16 +290,27 @@ void Node::OnBlocksPayload(const Bytes& payload) {
   }
 
   uint64_t incomingWork = 0;
-  for (size_t i = 0; i < incoming.blocks.size(); ++i) {
-    incomingWork = AddWork(incomingWork, GetBlockWork());
+  for (const auto& block : incoming.blocks) {
+    incomingWork = AddWork(incomingWork, BlockWork(block.targetBits));
   }
 
   bool replaced = false;
   {
     std::lock_guard<std::mutex> lock(mutex);
     if (incomingWork > bestTotalWork) {
+      Blockchain oldChain = chain;
+      auto oldTxs = CollectNonCoinbaseTxs(oldChain);
+      auto newTxs = CollectNonCoinbaseTxs(incoming);
       chain.ReplaceWith(incoming);
       mempool.clear();
+      for (const auto& kv : oldTxs) {
+        if (newTxs.find(kv.first) != newTxs.end()) {
+          continue;
+        }
+        if (chain.VerifyTransaction(kv.second)) {
+          mempool[kv.first] = kv.second;
+        }
+      }
       BuildIndexFromChain();
       replaced = true;
     }
