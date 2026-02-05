@@ -3,12 +3,12 @@
 [![CI](https://github.com/Daan-25/DCON/actions/workflows/ci.yml/badge.svg)](https://github.com/Daan-25/DCON/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/Daan-25/DCON)](https://github.com/Daan-25/DCON/releases)
 
-DCON Core is a minimal, Bitcoin-like cryptocurrency implementation in C++ for learning and local testing. It includes a UTXO model, Proof-of-Work, basic P2P, and a Qt desktop wallet.
+DCON Core is an independent cryptocurrency project in C++. It is inspired by Bitcoin concepts (UTXO, PoW, P2P), but it is **not** a Bitcoin implementation. The project is in active development and represents an early foundation for a standalone coin.
 
 ## Highlights
 
 - UTXO model with ECDSA signatures (secp256k1 via OpenSSL)
-- Proof-of-Work with 10-minute target and 2016-block retarget
+- Proof-of-Work with 10-minute target and 2016-block retarget (Bitcoin-inspired parameters)
 - Coinbase maturity (100 blocks) and subsidy halving (210,000 blocks)
 - Headers-first sync, inv/getdata, compact block announce
 - Fee-based mempool with eviction and fee estimation
@@ -128,7 +128,8 @@ These files are ignored by `.gitignore` and should not be committed.
 
 ## Notes and Limitations
 
-- This is a learning prototype, not production-ready.
+- This project is under active development and not production-ready.
+- DCON is an independent coin and not a Bitcoin implementation.
 - P2P is simplified compared to Bitcoin Core (custom wire format and simplified addrman).
 - Coinbase rewards mature after 100 blocks.
 - Transactions must meet `kMinRelayFeePerKb` to enter the mempool.
