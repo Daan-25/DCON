@@ -82,6 +82,10 @@ GitHub Actions builds this project on macOS, Linux, and Windows (MSYS2/MinGW64).
 Tagged versions (for example `v0.1.0`) publish prebuilt binaries on GitHub Releases.
 Windows release packages include the required OpenSSL and MinGW runtime DLLs.
 
+## Download
+
+Prebuilt binaries are available on the GitHub Releases page: [Releases](https://github.com/Daan-25/DCON/releases).
+
 ## Basic usage (single node)
 
 ```bash
