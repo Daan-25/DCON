@@ -82,7 +82,6 @@ GitHub Actions builds this project on macOS, Linux, and Windows (MSYS2/MinGW64).
 Tagged versions (for example `v0.1.0`) publish prebuilt binaries on GitHub Releases.
 Windows release packages include the required OpenSSL and MinGW runtime DLLs.
 Release archives include both the CLI (`dcon`) and the desktop wallet (`dcon-wallet`).
-An additional Windows ARM64 CLI-only package is published for each release.
 
 ## Download
 
