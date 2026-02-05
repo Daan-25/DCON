@@ -796,6 +796,19 @@ void Node::RequestHeaders() {
       }
       added++;
     }
+    if (!chain.blocks.empty()) {
+      const Bytes& genesis = chain.blocks.front().hash;
+      bool hasGenesis = false;
+      for (const auto& h : locator) {
+        if (h == genesis) {
+          hasGenesis = true;
+          break;
+        }
+      }
+      if (!hasGenesis) {
+        locator.push_back(genesis);
+      }
+    }
   }
   w.WriteU32(static_cast<uint32_t>(locator.size()));
   for (const auto& h : locator) {
@@ -1263,23 +1276,49 @@ void Node::OnHeaders(const Bytes& payload, int client, const std::string& peerAd
   bool invalid = false;
   {
     std::lock_guard<std::mutex> lock(mutex);
-    Blockchain temp = chain;
+    Blockchain anchorChain;
+    bool anchorReady = false;
 
     for (const auto& h : headers) {
-      const Block* prev = temp.blocks.empty() ? nullptr : &temp.blocks.back();
+      std::string hashKey = BytesToHex(h.hash);
+      if (blockIndex.find(hashKey) != blockIndex.end()) {
+        continue;
+      }
+
+      std::string prevKey = BytesToHex(h.prevBlockHash);
+      if (!anchorReady) {
+        if (prevKey.empty()) {
+          invalid = true;
+          break;
+        }
+        if (!BuildChainFromTip(prevKey, anchorChain.blocks)) {
+          // Header chain can be rooted before our known tips or from stale peers.
+          // Do not ban for this alone; ignore this batch.
+          break;
+        }
+        anchorReady = true;
+      } else {
+        if (anchorChain.blocks.empty() ||
+            BytesToHex(anchorChain.blocks.back().hash) != prevKey) {
+          if (!BuildChainFromTip(prevKey, anchorChain.blocks)) {
+            invalid = true;
+            break;
+          }
+        }
+      }
+
+      const Block* prev = anchorChain.blocks.empty() ? nullptr : &anchorChain.blocks.back();
       if (!ValidateHeader(h, prev)) {
         invalid = true;
         break;
       }
-      int expectedBits = temp.NextTargetBits();
+      int expectedBits = anchorChain.NextTargetBits();
       if (h.targetBits != expectedBits) {
         invalid = true;
         break;
       }
-      temp.blocks.push_back(h);
-      std::string hashKey = BytesToHex(h.hash);
-      if (blockIndex.find(hashKey) == blockIndex.end() &&
-          pendingBlocks.find(hashKey) == pendingBlocks.end()) {
+      anchorChain.blocks.push_back(h);
+      if (pendingBlocks.find(hashKey) == pendingBlocks.end()) {
         pendingBlocks.insert(hashKey);
         requestBlocks.push_back(h.hash);
       }
