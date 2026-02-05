@@ -5,7 +5,7 @@ DCON is a minimal Bitcoin-like cryptocurrency in C++ with UTXO transactions, Pro
 ## Features
 
 - UTXO model (Bitcoin-style)
-- Proof-of-Work mining with fixed difficulty
+- Proof-of-Work mining with 10-minute target and 2016-block retargeting
 - ECDSA signing/verification (secp256k1 via OpenSSL)
 - Base58Check-like addresses
 - Local persistence in `dcon.db` and `wallets.dat`
@@ -14,7 +14,10 @@ DCON is a minimal Bitcoin-like cryptocurrency in C++ with UTXO transactions, Pro
 - Simple P2P gossip for blocks and transactions
 - In-memory mempool for pending transactions
 - Qt desktop wallet UI
-- Difficulty adjustment + most-work chain selection
+- Coinbase maturity (100 blocks)
+- Block subsidy halving every 210,000 blocks
+- 1 MB max block size
+- Most-work chain selection
 
 ## Requirements
 
@@ -196,7 +199,8 @@ The wallet UI also supports importing/exporting wallet files (PEM) and viewing t
 
 - This is a minimal prototype, not production-ready.
 - P2P is basic: no peer discovery and no mempool policies.
-- Difficulty adjusts every `kDifficultyInterval` blocks using block timestamps; persistence is simple.
+- Difficulty retargets every 2016 blocks using timestamps (clamped to 4x); target spacing is 10 minutes.
+- Coinbase rewards mature after 100 blocks; subsidy halves every 210,000 blocks.
 - If you upgrade from an older version, you may need to delete `dcon.db` because the block format changed.
 
 ## Files created at runtime

@@ -43,7 +43,8 @@ struct Transaction {
 };
 
 TXOutput NewTXOutput(int64_t value, const std::string& address);
-Transaction NewCoinbaseTX(const std::string& to, const std::string& data);
+Transaction NewCoinbaseTX(const std::string& to, const std::string& data,
+                          int height);
 
 struct Wallets;
 class Blockchain;

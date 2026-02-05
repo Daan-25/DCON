@@ -193,14 +193,15 @@ TXOutput NewTXOutput(int64_t value, const std::string& address) {
   return out;
 }
 
-Transaction NewCoinbaseTX(const std::string& to, const std::string& data) {
+Transaction NewCoinbaseTX(const std::string& to, const std::string& data,
+                          int height) {
   Transaction tx;
   TXInput in;
   in.txid = Bytes{};
   in.vout = -1;
   in.signature = Bytes{};
   in.pubKey = Bytes(data.begin(), data.end());
-  TXOutput out = NewTXOutput(kSubsidy, to);
+  TXOutput out = NewTXOutput(BlockSubsidy(height), to);
   tx.vin.push_back(in);
   tx.vout.push_back(out);
   tx.id = tx.Hash();

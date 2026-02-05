@@ -74,6 +74,20 @@ Block NewBlock(const std::vector<Transaction>& txs, const Bytes& prevHash,
 }
 
 bool ValidateBlock(const Block& block, const Block* prev) {
+  if (block.Serialize().size() > kMaxBlockBytes) {
+    return false;
+  }
+  if (block.transactions.empty()) {
+    return false;
+  }
+  if (!block.transactions.front().IsCoinbase()) {
+    return false;
+  }
+  for (size_t i = 1; i < block.transactions.size(); ++i) {
+    if (block.transactions[i].IsCoinbase()) {
+      return false;
+    }
+  }
   if (block.targetBits < kMinTargetBits || block.targetBits > kMaxTargetBits) {
     return false;
   }

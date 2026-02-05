@@ -1,5 +1,6 @@
 #include "dcon/blockchain.h"
 
+#include <cmath>
 #include <unordered_set>
 
 #include "dcon/constants.h"
@@ -55,7 +56,7 @@ bool Blockchain::Create(const std::string& address) {
   if (!ValidateAddress(address)) {
     return false;
   }
-  Transaction coinbase = NewCoinbaseTX(address, kGenesisData);
+  Transaction coinbase = NewCoinbaseTX(address, kGenesisData, 0);
   Block genesis = NewBlock({coinbase}, Bytes{}, 0, kInitialTargetBits);
   blocks.clear();
   blocks.push_back(genesis);
@@ -63,21 +64,23 @@ bool Blockchain::Create(const std::string& address) {
 }
 
 bool Blockchain::AddBlock(const std::vector<Transaction>& txs) {
+  int nextHeight = blocks.empty() ? 0 : blocks.back().height + 1;
   for (const auto& tx : txs) {
-    if (!VerifyTransaction(tx)) {
+    if (!VerifyTransactionAtHeight(tx, nextHeight)) {
       return false;
     }
   }
 
-  const Block& last = blocks.back();
-  Block newBlock = NewBlock(txs, last.hash, last.height + 1, NextTargetBits());
+  Bytes prevHash = blocks.empty() ? Bytes{} : blocks.back().hash;
+  Block newBlock = NewBlock(txs, prevHash, nextHeight, NextTargetBits());
   blocks.push_back(newBlock);
   return Save();
 }
 
 bool Blockchain::MineBlock(const std::vector<Transaction>& txs,
                            const std::string& minerAddress) {
-  Transaction coinbase = NewCoinbaseTX(minerAddress, "");
+  int nextHeight = blocks.empty() ? 0 : blocks.back().height + 1;
+  Transaction coinbase = NewCoinbaseTX(minerAddress, "", nextHeight);
   std::vector<Transaction> all = txs;
   all.insert(all.begin(), coinbase);
   return AddBlock(all);
@@ -96,7 +99,7 @@ bool Blockchain::AddExternalBlock(const Block& block) {
   }
 
   for (const auto& tx : block.transactions) {
-    if (!VerifyTransaction(tx)) {
+    if (!VerifyTransactionAtHeight(tx, block.height)) {
       return false;
     }
   }
@@ -120,10 +123,17 @@ bool Blockchain::ReplaceWith(const Blockchain& other) {
 }
 
 bool Blockchain::FindTransaction(const Bytes& id, Transaction& out) const {
+  int height = 0;
+  return FindTransaction(id, out, height);
+}
+
+bool Blockchain::FindTransaction(const Bytes& id, Transaction& out,
+                                 int& heightOut) const {
   for (const auto& block : blocks) {
     for (const auto& tx : block.transactions) {
       if (tx.id == id) {
         out = tx;
+        heightOut = block.height;
         return true;
       }
     }
@@ -144,13 +154,23 @@ bool Blockchain::SignTransaction(Transaction& tx, EC_KEY* privKey) const {
 }
 
 bool Blockchain::VerifyTransaction(const Transaction& tx) const {
+  int height = blocks.empty() ? 0 : blocks.back().height + 1;
+  return VerifyTransactionAtHeight(tx, height);
+}
+
+bool Blockchain::VerifyTransactionAtHeight(const Transaction& tx,
+                                           int height) const {
   if (tx.IsCoinbase()) {
     return true;
   }
   std::unordered_map<std::string, Transaction> prevTXs;
   for (const auto& in : tx.vin) {
     Transaction prev;
-    if (!FindTransaction(in.txid, prev)) {
+    int prevHeight = 0;
+    if (!FindTransaction(in.txid, prev, prevHeight)) {
+      return false;
+    }
+    if (prev.IsCoinbase() && height - prevHeight < kCoinbaseMaturity) {
       return false;
     }
     prevTXs[BytesToHex(prev.id)] = prev;
@@ -161,6 +181,7 @@ bool Blockchain::VerifyTransaction(const Transaction& tx) const {
 std::vector<TXOutput> Blockchain::FindUTXO(const Bytes& pubKeyHash) const {
   std::unordered_map<std::string, std::unordered_set<int64_t>> spent;
   std::vector<TXOutput> utxos;
+  int spendableHeight = blocks.empty() ? 0 : blocks.back().height + 1;
 
   for (int i = static_cast<int>(blocks.size()) - 1; i >= 0; --i) {
     const auto& block = blocks[static_cast<size_t>(i)];
@@ -169,6 +190,10 @@ std::vector<TXOutput> Blockchain::FindUTXO(const Bytes& pubKeyHash) const {
 
       for (size_t outIdx = 0; outIdx < tx.vout.size(); ++outIdx) {
         if (spent[txid].count(static_cast<int64_t>(outIdx)) > 0) {
+          continue;
+        }
+        if (tx.IsCoinbase() &&
+            spendableHeight - block.height < kCoinbaseMaturity) {
           continue;
         }
         const auto& out = tx.vout[outIdx];
@@ -193,6 +218,7 @@ int64_t Blockchain::FindSpendableOutputs(
     std::unordered_map<std::string, std::vector<int64_t>>& out) const {
   std::unordered_map<std::string, std::unordered_set<int64_t>> spent;
   int64_t accumulated = 0;
+  int spendableHeight = blocks.empty() ? 0 : blocks.back().height + 1;
 
   for (int i = static_cast<int>(blocks.size()) - 1; i >= 0; --i) {
     const auto& block = blocks[static_cast<size_t>(i)];
@@ -201,6 +227,10 @@ int64_t Blockchain::FindSpendableOutputs(
 
       for (size_t outIdx = 0; outIdx < tx.vout.size(); ++outIdx) {
         if (spent[txid].count(static_cast<int64_t>(outIdx)) > 0) {
+          continue;
+        }
+        if (tx.IsCoinbase() &&
+            spendableHeight - block.height < kCoinbaseMaturity) {
           continue;
         }
         const auto& outTx = tx.vout[outIdx];
@@ -274,8 +304,9 @@ int Blockchain::NextTargetBits() const {
     return kInitialTargetBits;
   }
   const Block& last = blocks.back();
+  int lastBits = last.targetBits == 0 ? kInitialTargetBits : last.targetBits;
   if ((last.height + 1) % kDifficultyInterval != 0) {
-    return last.targetBits == 0 ? kInitialTargetBits : last.targetBits;
+    return lastBits;
   }
 
   int idx = static_cast<int>(blocks.size()) - kDifficultyInterval;
@@ -285,13 +316,22 @@ int Blockchain::NextTargetBits() const {
   const Block& adjust = blocks[static_cast<size_t>(idx)];
   int64_t actual = last.timestamp - adjust.timestamp;
   int64_t expected = static_cast<int64_t>(kTargetSpacingSeconds) * kDifficultyInterval;
-
-  int next = last.targetBits == 0 ? kInitialTargetBits : last.targetBits;
-  if (actual < expected / 2) {
-    next += 1;
-  } else if (actual > expected * 2) {
-    next -= 1;
+  if (actual <= 0) {
+    actual = 1;
   }
+
+  int64_t minActual = expected / 4;
+  int64_t maxActual = expected * 4;
+  if (actual < minActual) {
+    actual = minActual;
+  }
+  if (actual > maxActual) {
+    actual = maxActual;
+  }
+
+  double ratio = static_cast<double>(expected) / static_cast<double>(actual);
+  int delta = static_cast<int>(std::lround(std::log2(ratio)));
+  int next = lastBits + delta;
 
   if (next < kMinTargetBits) {
     next = kMinTargetBits;
@@ -325,7 +365,7 @@ bool ValidateChain(const Blockchain& bc) {
       return false;
     }
     for (const auto& tx : block.transactions) {
-      if (!tmp.VerifyTransaction(tx)) {
+      if (!tmp.VerifyTransactionAtHeight(tx, block.height)) {
         return false;
       }
     }

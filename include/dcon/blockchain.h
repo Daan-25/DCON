@@ -37,8 +37,10 @@ class Blockchain {
   bool ReplaceWith(const Blockchain& other);
 
   bool FindTransaction(const Bytes& id, Transaction& out) const;
+  bool FindTransaction(const Bytes& id, Transaction& out, int& heightOut) const;
   bool SignTransaction(Transaction& tx, EC_KEY* privKey) const;
   bool VerifyTransaction(const Transaction& tx) const;
+  bool VerifyTransactionAtHeight(const Transaction& tx, int height) const;
 
   std::vector<TXOutput> FindUTXO(const Bytes& pubKeyHash) const;
   int64_t FindSpendableOutputs(const Bytes& pubKeyHash, int64_t amount,

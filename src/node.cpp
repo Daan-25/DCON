@@ -147,7 +147,8 @@ void Node::OnTx(const Transaction& tx) {
     std::lock_guard<std::mutex> lock(mutex);
     std::string txid = BytesToHex(tx.id);
     if (mempool.find(txid) == mempool.end()) {
-      if (chain.VerifyTransaction(tx)) {
+      int nextHeight = chain.blocks.empty() ? 0 : chain.blocks.back().height + 1;
+      if (chain.VerifyTransactionAtHeight(tx, nextHeight)) {
         mempool[txid] = tx;
         added = true;
       }
@@ -214,7 +215,7 @@ void Node::OnBlock(const Block& block) {
       Blockchain temp;
       temp.blocks = parentChain;
       for (const auto& tx : block.transactions) {
-        if (!temp.VerifyTransaction(tx)) {
+        if (!temp.VerifyTransactionAtHeight(tx, block.height)) {
           return;
         }
       }
@@ -264,7 +265,8 @@ void Node::OnBlock(const Block& block) {
         if (newTxs.find(kv.first) != newTxs.end()) {
           continue;
         }
-        if (chain.VerifyTransaction(kv.second)) {
+        int nextHeight = chain.blocks.empty() ? 0 : chain.blocks.back().height + 1;
+        if (chain.VerifyTransactionAtHeight(kv.second, nextHeight)) {
           mempool[kv.first] = kv.second;
         }
       }
@@ -307,7 +309,8 @@ void Node::OnBlocksPayload(const Bytes& payload) {
         if (newTxs.find(kv.first) != newTxs.end()) {
           continue;
         }
-        if (chain.VerifyTransaction(kv.second)) {
+        int nextHeight = chain.blocks.empty() ? 0 : chain.blocks.back().height + 1;
+        if (chain.VerifyTransactionAtHeight(kv.second, nextHeight)) {
           mempool[kv.first] = kv.second;
         }
       }
