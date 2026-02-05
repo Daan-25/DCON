@@ -23,6 +23,7 @@ static void PrintUsage() {
   std::cout << "  getbalance -address ADDRESS\n";
   std::cout << "  txhistory -address ADDRESS\n";
   std::cout << "  send -from FROM -to TO -amount N [-mine true|false] [-peers host:port,...]\n";
+  std::cout << "  mineblocks -address ADDRESS [-count N] [-peers host:port,...]\n";
   std::cout << "  startnode -port PORT [-peers host:port,...] [-seeds host[:port],...] "
                "[-announce host:port] [-miner ADDRESS]\n";
   std::cout << "  printchain\n";
@@ -309,6 +310,47 @@ int main(int argc, char** argv) {
       return 1;
     }
     std::cout << "Success! Transaction included in a block (no mining reward).\n";
+    return 0;
+  }
+
+  if (command == "mineblocks") {
+    std::string address = GetArgValue(argc, argv, "-address");
+    std::string countStr = GetArgValue(argc, argv, "-count");
+    std::string peersArg = GetArgValue(argc, argv, "-peers");
+    std::vector<std::string> peers = SplitList(peersArg);
+    int count = 1;
+    if (!countStr.empty()) {
+      count = std::stoi(countStr);
+    }
+    if (count <= 0) {
+      std::cerr << "-count must be > 0\n";
+      return 1;
+    }
+    if (address.empty()) {
+      std::cerr << "-address is required\n";
+      return 1;
+    }
+    if (!ValidateAddress(address)) {
+      std::cerr << "Invalid address\n";
+      return 1;
+    }
+    Blockchain bc;
+    if (!Blockchain::Load(bc)) {
+      std::cerr << "Blockchain not found. Create it first.\n";
+      return 1;
+    }
+    for (int i = 0; i < count; ++i) {
+      if (!bc.MineBlock({}, address)) {
+        std::cerr << "Mining failed at block " << i << "\n";
+        return 1;
+      }
+      const Block& block = bc.blocks.back();
+      if (!peers.empty()) {
+        BroadcastToPeers(peers, "block", block.Serialize());
+      }
+      std::cout << "Mined block " << block.height << " " << BytesToHex(block.hash)
+                << "\n";
+    }
     return 0;
   }
 

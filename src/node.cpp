@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <ctime>
 #include <iostream>
 #include <limits>
@@ -370,6 +371,7 @@ void Node::BuildIndexFromChain() {
   bestTip.clear();
   bestTotalWork = 0;
   pendingBlocks.clear();
+  wantMoreHeaders = false;
 
   uint64_t cumulative = 0;
   for (const auto& block : chain.blocks) {
@@ -381,6 +383,21 @@ void Node::BuildIndexFromChain() {
     bestTip = hashKey;
     bestTotalWork = cumulative;
   }
+}
+
+void Node::IndexBlock(const Block& block) {
+  std::string hashKey = BytesToHex(block.hash);
+  std::string prevKey = BytesToHex(block.prevBlockHash);
+  uint64_t parentWork = 0;
+  auto it = totalWork.find(prevKey);
+  if (it != totalWork.end()) {
+    parentWork = it->second;
+  }
+  uint64_t work = AddWork(parentWork, BlockWork(block.targetBits));
+  blockIndex[hashKey] = block;
+  totalWork[hashKey] = work;
+  bestTip = hashKey;
+  bestTotalWork = work;
 }
 
 bool Node::BuildChainFromTip(const std::string& tip, std::vector<Block>& out) const {
@@ -768,7 +785,16 @@ void Node::OnHeaders(const Bytes& payload, int client, const std::string& peerAd
       SendMessage(client, "getdata", req);
     }
   }
-  if (requestMore) {
+  bool requestNext = false;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    wantMoreHeaders = requestMore;
+    requestNext = requestMore && pendingBlocks.empty();
+    if (requestNext) {
+      wantMoreHeaders = false;
+    }
+  }
+  if (requestNext) {
     RequestHeaders();
   }
 }
@@ -815,6 +841,74 @@ void Node::TryMine() {
   }
 }
 
+void Node::MiningLoop() {
+  while (true) {
+    if (minerAddress.empty()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(250));
+      continue;
+    }
+
+    std::vector<Transaction> selected;
+    Bytes prevHash;
+    int nextHeight = 0;
+    int targetBits = kInitialTargetBits;
+
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      nextHeight = chain.blocks.empty() ? 0 : chain.blocks.back().height + 1;
+      prevHash = chain.blocks.empty() ? Bytes{} : chain.blocks.back().hash;
+      targetBits = chain.NextTargetBits();
+
+      for (const auto& kv : mempool) {
+        if (chain.VerifyTransactionAtHeight(kv.second, nextHeight)) {
+          selected.push_back(kv.second);
+        }
+      }
+    }
+
+    Transaction coinbase = NewCoinbaseTX(minerAddress, "", nextHeight);
+    std::vector<Transaction> all = selected;
+    all.insert(all.begin(), coinbase);
+    Block candidate = NewBlock(all, prevHash, nextHeight, targetBits);
+
+    bool accepted = false;
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      const Block* prev = chain.blocks.empty() ? nullptr : &chain.blocks.back();
+      if (prev && prev->hash != prevHash) {
+        continue;
+      }
+      if (!prev && !prevHash.empty()) {
+        continue;
+      }
+      if (!ValidateBlock(candidate, prev)) {
+        continue;
+      }
+      bool ok = true;
+      for (const auto& tx : candidate.transactions) {
+        if (!chain.VerifyTransactionAtHeight(tx, candidate.height)) {
+          ok = false;
+          break;
+        }
+      }
+      if (!ok) {
+        continue;
+      }
+      chain.blocks.push_back(candidate);
+      chain.Save();
+      IndexBlock(candidate);
+      RemoveMempoolTxs(candidate);
+      accepted = true;
+    }
+
+    if (accepted) {
+      std::cout << "Mined block " << candidate.height << " "
+                << BytesToHex(candidate.hash) << "\n";
+      BroadcastInv({}, {candidate.hash});
+    }
+  }
+}
+
 void Node::OnTx(const Transaction& tx) {
   if (tx.id.empty()) {
     return;
@@ -834,7 +928,6 @@ void Node::OnTx(const Transaction& tx) {
 
   if (added) {
     BroadcastInv({tx.id}, {});
-    TryMine();
   }
 }
 
@@ -953,6 +1046,18 @@ void Node::OnBlock(const Block& block) {
 
   if (accepted) {
     BroadcastInv({}, {block.hash});
+  }
+
+  bool requestMore = false;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (pendingBlocks.empty() && wantMoreHeaders) {
+      wantMoreHeaders = false;
+      requestMore = true;
+    }
+  }
+  if (requestMore) {
+    RequestHeaders();
   }
 
   for (const auto& orphan : orphanFollowUps) {
@@ -1092,6 +1197,9 @@ void Node::Serve(int port) {
   std::cout << "Node listening on port " << port << "\n";
   RequestHeaders();
   RequestPeers();
+  if (!minerAddress.empty()) {
+    std::thread([this]() { MiningLoop(); }).detach();
+  }
 
   while (true) {
     sockaddr_in clientAddr {};

@@ -33,6 +33,7 @@ class Node {
   std::unordered_map<std::string, std::vector<Block>> orphansByPrev;
   std::unordered_set<std::string> knownPeers;
   std::unordered_set<std::string> pendingBlocks;
+  bool wantMoreHeaders = false;
   std::string bestTip;
 
   void BuildIndexFromChain();
@@ -54,6 +55,7 @@ class Node {
   Bytes BuildAddrPayload(size_t maxCount) const;
   void RemoveMempoolTxs(const Block& block);
   void TryMine();
+  void MiningLoop();
   void OnTx(const Transaction& tx);
   void OnBlock(const Block& block);
   void OnBlocksPayload(const Bytes& payload);
@@ -68,4 +70,5 @@ class Node {
   bool IsSelfAddress(const std::string& peer) const;
   void RequestFromPeer(const std::string& peer, const std::string& type,
                        const Bytes& payload);
+  void IndexBlock(const Block& block);
 };

@@ -74,6 +74,7 @@ cmake -S . -B build -DOPENSSL_ROOT_DIR=/opt/homebrew/opt/openssl@3
 ./build/dcon getbalance -address <YOUR_ADDRESS>
 ./build/dcon txhistory -address <YOUR_ADDRESS>
 ./build/dcon send -from <FROM_ADDR> -to <TO_ADDR> -amount 10
+./build/dcon mineblocks -address <YOUR_ADDRESS> -count 101
 ./build/dcon printchain
 ```
 
@@ -150,7 +151,7 @@ Broadcast a transaction to peers (without local mining):
 ./build/dcon send -from <FROM_ADDR> -to <TO_ADDR> -amount 5 -mine false -peers 127.0.0.1:3001 -datadir data/node1
 ```
 
-A node started with `-miner` will attempt to mine a block whenever the mempool receives transactions, and will broadcast the block afterward.
+A node started with `-miner` will continuously mine blocks (including empty blocks when the mempool is empty) and broadcast inventory to peers.
 
 ## Desktop wallet (Qt)
 
@@ -212,11 +213,12 @@ The wallet UI also supports importing/exporting wallet files (PEM) and viewing t
 ## Notes and limitations
 
 - This is a minimal prototype, not production-ready.
-- P2P is basic: no peer discovery and no mempool policies.
+- P2P is basic: simplified peer discovery and no mempool policies.
 - Difficulty retargets every 2016 blocks using timestamps (clamped to 4x); target spacing is 10 minutes.
 - Coinbase rewards mature after 100 blocks; subsidy halves every 210,000 blocks.
 - If you upgrade from an older version, you may need to delete `dcon.db` because the block format changed.
 - P2P is still simplified compared to Bitcoin Core (custom wire format, no addrman scoring).
+ - Use `mineblocks -count 101` to unlock coinbase funds for spending.
 
 ## Files created at runtime
 
