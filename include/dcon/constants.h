@@ -3,7 +3,8 @@
 #include <cstdint>
 
 inline constexpr unsigned char kAddressVersion = 0x1E;
-inline constexpr uint32_t kPowLimitBits = 0x207fffff;
+// Bitcoin mainnet pow limit (difficulty 1 target).
+inline constexpr uint32_t kPowLimitBits = 0x1d00ffff;
 inline constexpr int kInitialTargetBits = static_cast<int>(kPowLimitBits);
 inline constexpr int kDifficultyInterval = 2016;
 inline constexpr int kTargetSpacingSeconds = 600;
