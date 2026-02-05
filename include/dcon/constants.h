@@ -3,11 +3,11 @@
 #include <cstdint>
 
 inline constexpr unsigned char kAddressVersion = 0x1E;
-// Bitcoin mainnet pow limit (difficulty 1 target).
-inline constexpr uint32_t kPowLimitBits = 0x1d00ffff;
+// Devnet pow limit tuned for ~10s CPU blocks on a single miner.
+inline constexpr uint32_t kPowLimitBits = 0x20000aec;
 inline constexpr int kInitialTargetBits = static_cast<int>(kPowLimitBits);
-inline constexpr int kDifficultyInterval = 2016;
-inline constexpr int kTargetSpacingSeconds = 600;
+inline constexpr int kDifficultyInterval = 60;
+inline constexpr int kTargetSpacingSeconds = 10;
 inline constexpr int kCoinbaseMaturity = 100;
 inline constexpr int kHalvingInterval = 210000;
 inline constexpr size_t kMaxBlockBytes = 1000000;
