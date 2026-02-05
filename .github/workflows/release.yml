@@ -136,3 +136,40 @@ jobs:
             dcon-linux-*.tar.gz
             dcon-macos-*.tar.gz
             dcon-windows-x86_64.tar.gz
+
+  build-windows-arm64:
+    runs-on: windows-latest
+    needs: build-release
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup vcpkg
+        run: |
+          git clone https://github.com/microsoft/vcpkg C:/vcpkg
+          C:/vcpkg/bootstrap-vcpkg.bat
+
+      - name: Install OpenSSL (ARM64)
+        run: C:/vcpkg/vcpkg.exe install openssl --triplet arm64-windows
+
+      - name: Configure (Windows ARM64)
+        run: >
+          cmake -S . -B build-arm64 -A ARM64 -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
+          -DVCPKG_TARGET_TRIPLET=arm64-windows
+
+      - name: Build (Windows ARM64)
+        run: cmake --build build-arm64 --config Release
+
+      - name: Package (Windows ARM64)
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp build-arm64/Release/dcon.exe dist/
+          tar -czf dcon-windows-arm64.tar.gz -C dist .
+
+      - name: Upload release asset (Windows ARM64)
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dcon-windows-arm64.tar.gz
