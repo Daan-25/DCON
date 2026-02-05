@@ -105,15 +105,28 @@ static bool QueryNodeStatus(const std::string& peerAddr,
     return false;
   }
   SetSocketTimeoutMs(sock, 2000);
-  Bytes version = BuildClientVersionPayload();
-  if (!SendMessage(sock, "version", version) ||
-      !SendMessage(sock, "getnodeinfo", Bytes{})) {
+  if (!SendMessage(sock, "version", BuildClientVersionPayload())) {
     CloseSocket(sock);
     return false;
   }
+
+  bool sentQuery = false;
   std::string type;
   Bytes payload;
   while (ReceiveMessage(sock, type, payload)) {
+    if (!sentQuery && type == "verack") {
+      if (!SendMessage(sock, "getnodeinfo", Bytes{})) {
+        CloseSocket(sock);
+        return false;
+      }
+      sentQuery = true;
+      continue;
+    }
+    if (!sentQuery && type == "version") {
+      Bytes empty;
+      SendMessage(sock, "verack", empty);
+      continue;
+    }
     if (type != "nodeinfo") {
       continue;
     }
