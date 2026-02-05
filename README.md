@@ -81,10 +81,13 @@ GitHub Actions builds this project on macOS, Linux, and Windows (MSYS2/MinGW64).
 
 Tagged versions (for example `v0.1.0`) publish prebuilt binaries on GitHub Releases.
 Windows release packages include the required OpenSSL and MinGW runtime DLLs.
+Release archives include both the CLI (`dcon`) and the desktop wallet (`dcon-wallet`).
 
 ## Download
 
 Prebuilt binaries are available on the GitHub Releases page: [Releases](https://github.com/Daan-25/DCON/releases).
+The wallet requires a Qt 6 runtime; Windows release archives bundle the Qt DLLs.
+On macOS and Linux, install Qt 6 if the wallet fails to launch.
 
 ## Basic usage (single node)
 

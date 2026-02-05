@@ -24,13 +24,13 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake build-essential libssl-dev
+          sudo apt-get install -y cmake build-essential libssl-dev qt6-base-dev qt6-base-dev-tools
 
       - name: Install deps (macOS)
         if: runner.os == 'macOS'
         run: |
           brew update
-          brew install openssl@3
+          brew install openssl@3 qt
 
       - name: Install deps (Windows MSYS2)
         if: runner.os == 'Windows'
@@ -43,6 +43,7 @@ jobs:
             mingw-w64-x86_64-openssl
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-qt6
 
       - name: Configure (Linux)
         if: runner.os == 'Linux'
@@ -51,6 +52,12 @@ jobs:
       - name: Build (Linux)
         if: runner.os == 'Linux'
         run: cmake --build build --config Release
+      - name: Configure wallet (Linux)
+        if: runner.os == 'Linux'
+        run: cmake -S wallet -B wallet/build -DCMAKE_BUILD_TYPE=Release
+      - name: Build wallet (Linux)
+        if: runner.os == 'Linux'
+        run: cmake --build wallet/build --config Release
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
@@ -58,6 +65,7 @@ jobs:
           arch="$(uname -m)"
           mkdir -p dist
           cp build/dcon dist/
+          cp wallet/build/dcon-wallet dist/
           tar -czf "dcon-linux-${arch}.tar.gz" -C dist .
 
       - name: Configure (macOS)
@@ -69,6 +77,14 @@ jobs:
       - name: Build (macOS)
         if: runner.os == 'macOS'
         run: cmake --build build --config Release
+      - name: Configure wallet (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          QT_PREFIX="$(brew --prefix qt)"
+          cmake -S wallet -B wallet/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$QT_PREFIX"
+      - name: Build wallet (macOS)
+        if: runner.os == 'macOS'
+        run: cmake --build wallet/build --config Release
 
       - name: Package (macOS)
         if: runner.os == 'macOS'
@@ -76,6 +92,7 @@ jobs:
           arch="$(uname -m)"
           mkdir -p dist
           cp build/dcon dist/
+          cp wallet/build/dcon-wallet dist/
           tar -czf "dcon-macos-${arch}.tar.gz" -C dist .
 
       - name: Configure (Windows MSYS2)
@@ -87,6 +104,14 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: cmake --build build --config Release
+      - name: Configure wallet (Windows MSYS2)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: cmake -S wallet -B wallet/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/mingw64
+      - name: Build wallet (Windows MSYS2)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: cmake --build wallet/build --config Release
 
       - name: Package (Windows MSYS2)
         if: runner.os == 'Windows'
@@ -94,6 +119,10 @@ jobs:
         run: |
           mkdir -p dist
           cp build/dcon.exe dist/
+          cp wallet/build/dcon-wallet.exe dist/
+          if command -v windeployqt >/dev/null; then
+            windeployqt dist/dcon-wallet.exe
+          fi
           shopt -s nullglob
           for f in /mingw64/bin/libcrypto-*.dll /mingw64/bin/libssl-*.dll /mingw64/bin/libgcc_s_seh-1.dll /mingw64/bin/libstdc++-6.dll /mingw64/bin/libwinpthread-1.dll; do
             cp "$f" dist/
