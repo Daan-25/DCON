@@ -3,9 +3,8 @@
 #include <cstdint>
 
 inline constexpr unsigned char kAddressVersion = 0x1E;
-inline constexpr int kInitialTargetBits = 18;
-inline constexpr int kMinTargetBits = 4;
-inline constexpr int kMaxTargetBits = 30;
+inline constexpr uint32_t kPowLimitBits = 0x207fffff;
+inline constexpr int kInitialTargetBits = static_cast<int>(kPowLimitBits);
 inline constexpr int kDifficultyInterval = 2016;
 inline constexpr int kTargetSpacingSeconds = 600;
 inline constexpr int kCoinbaseMaturity = 100;

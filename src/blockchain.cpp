@@ -1,12 +1,12 @@
 #include "dcon/blockchain.h"
 
 #include <algorithm>
-#include <cmath>
 #include <limits>
 #include <unordered_set>
 
 #include "dcon/constants.h"
 #include "dcon/crypto.h"
+#include "dcon/pow.h"
 #include "dcon/serialize.h"
 #include "dcon/storage.h"
 #include "dcon/wallet.h"
@@ -482,9 +482,10 @@ int Blockchain::NextTargetBits() const {
     return kInitialTargetBits;
   }
   const Block& last = blocks.back();
-  int lastBits = last.targetBits == 0 ? kInitialTargetBits : last.targetBits;
+  uint32_t lastBits =
+      last.targetBits == 0 ? kPowLimitBits : static_cast<uint32_t>(last.targetBits);
   if ((last.height + 1) % kDifficultyInterval != 0) {
-    return lastBits;
+    return static_cast<int>(lastBits);
   }
 
   int idx = static_cast<int>(blocks.size()) - kDifficultyInterval;
@@ -507,17 +508,57 @@ int Blockchain::NextTargetBits() const {
     actual = maxActual;
   }
 
-  double ratio = static_cast<double>(expected) / static_cast<double>(actual);
-  int delta = static_cast<int>(std::lround(std::log2(ratio)));
-  int next = lastBits + delta;
+  BIGNUM* oldTarget = BN_new();
+  BIGNUM* powLimit = BN_new();
+  BIGNUM* actualBn = BN_new();
+  BIGNUM* expectedBn = BN_new();
+  BIGNUM* newTarget = BN_new();
+  BN_CTX* ctx = BN_CTX_new();
+  if (!oldTarget || !powLimit || !actualBn || !expectedBn || !newTarget || !ctx) {
+    BN_free(oldTarget);
+    BN_free(powLimit);
+    BN_free(actualBn);
+    BN_free(expectedBn);
+    BN_free(newTarget);
+    BN_CTX_free(ctx);
+    return static_cast<int>(lastBits);
+  }
 
-  if (next < kMinTargetBits) {
-    next = kMinTargetBits;
+  if (!CompactToTarget(lastBits, oldTarget) || !CompactToTarget(kPowLimitBits, powLimit)) {
+    BN_free(oldTarget);
+    BN_free(powLimit);
+    BN_free(actualBn);
+    BN_free(expectedBn);
+    BN_free(newTarget);
+    BN_CTX_free(ctx);
+    return static_cast<int>(lastBits);
   }
-  if (next > kMaxTargetBits) {
-    next = kMaxTargetBits;
+
+  BN_set_word(actualBn, static_cast<BN_ULONG>(actual));
+  BN_set_word(expectedBn, static_cast<BN_ULONG>(expected));
+  BN_mul(newTarget, oldTarget, actualBn, ctx);
+  BN_div(newTarget, nullptr, newTarget, expectedBn, ctx);
+
+  if (BN_cmp(newTarget, BN_value_one()) < 0) {
+    BN_one(newTarget);
   }
-  return next;
+  if (BN_cmp(newTarget, powLimit) > 0) {
+    BN_copy(newTarget, powLimit);
+  }
+
+  uint32_t next = TargetToCompact(newTarget);
+
+  BN_free(oldTarget);
+  BN_free(powLimit);
+  BN_free(actualBn);
+  BN_free(expectedBn);
+  BN_free(newTarget);
+  BN_CTX_free(ctx);
+
+  if (next == 0) {
+    next = lastBits;
+  }
+  return static_cast<int>(next);
 }
 
 bool ValidateChain(const Blockchain& bc) {

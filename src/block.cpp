@@ -123,9 +123,15 @@ Block NewBlock(const std::vector<Transaction>& txs, const Bytes& prevHash,
 }
 
 bool ValidateHeader(const Block& header, const Block* prev) {
-  if (header.targetBits < kMinTargetBits || header.targetBits > kMaxTargetBits) {
+  BIGNUM* target = BN_new();
+  if (!target) {
     return false;
   }
+  if (!CompactToTarget(static_cast<uint32_t>(header.targetBits), target)) {
+    BN_free(target);
+    return false;
+  }
+  BN_free(target);
   if (prev) {
     if (header.height != prev->height + 1) {
       return false;
@@ -140,9 +146,6 @@ bool ValidateHeader(const Block& header, const Block* prev) {
     if (!header.prevBlockHash.empty()) {
       return false;
     }
-  }
-  if (header.targetBits <= 0) {
-    return false;
   }
   if (header.merkleRoot.empty()) {
     return false;
