@@ -1,5 +1,7 @@
 # DCON (C++)
 
+[![CI](https://github.com/Daan-25/DCON/actions/workflows/ci.yml/badge.svg)](https://github.com/Daan-25/DCON/actions/workflows/ci.yml)
+
 DCON is a minimal Bitcoin-like cryptocurrency in C++ with UTXO transactions, Proof-of-Work mining, and ECDSA signatures. It is a learning prototype that runs locally on macOS, Linux, and Windows and includes a basic P2P layer with an in-memory mempool.
 
 ## Features
@@ -70,6 +72,10 @@ cmake -S . -B build -DOPENSSL_ROOT_DIR=/opt/homebrew/opt/openssl@3
 ```
 
 (Or `/usr/local/opt/openssl@3` on Intel Macs.)
+
+## CI
+
+GitHub Actions builds this project on macOS, Linux, and Windows (MSYS2/MinGW64).
 
 ## Basic usage (single node)
 
