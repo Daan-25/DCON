@@ -3,6 +3,7 @@
 
 #include "dcon/blockchain.h"
 #include "dcon/base58.h"
+#include "dcon/constants.h"
 #include "dcon/crypto.h"
 #include "dcon/net.h"
 #include "dcon/node.h"
@@ -22,7 +23,9 @@ static void PrintUsage() {
   std::cout << "  createblockchain -address ADDRESS\n";
   std::cout << "  getbalance -address ADDRESS\n";
   std::cout << "  txhistory -address ADDRESS\n";
-  std::cout << "  send -from FROM -to TO -amount N [-mine true|false] [-peers host:port,...]\n";
+  std::cout << "  send -from FROM -to TO -amount N [-fee N|auto] [-feerate N] "
+               "[-mine true|false] [-peers host:port,...]\n";
+  std::cout << "  estimatefee [-blocks N]\n";
   std::cout << "  mineblocks -address ADDRESS [-count N] [-peers host:port,...]\n";
   std::cout << "  startnode -port PORT [-peers host:port,...] [-seeds host[:port],...] "
                "[-announce host:port] [-miner ADDRESS]\n";
@@ -63,6 +66,35 @@ static bool ReadTextFile(const std::string& path, std::string& out) {
 static bool WriteTextFile(const std::string& path, const std::string& data) {
   Bytes bytes(data.begin(), data.end());
   return WriteFileBytes(path, bytes);
+}
+
+static Transaction BuildTxWithFeeRate(const std::string& from,
+                                      const std::string& to,
+                                      int64_t amount,
+                                      int64_t feeRate,
+                                      Blockchain& bc,
+                                      const Wallets& wallets) {
+  int64_t fee = 0;
+  Transaction tx;
+  for (int i = 0; i < 3; ++i) {
+    tx = NewUTXOTransaction(from, to, amount, fee, bc, wallets);
+    if (tx.id.empty()) {
+      return tx;
+    }
+    size_t size = tx.Serialize(true).size();
+    if (size == 0) {
+      return Transaction{};
+    }
+    int64_t newFee = (feeRate * static_cast<int64_t>(size) + 999) / 1000;
+    if (newFee == fee) {
+      break;
+    }
+    fee = newFee;
+  }
+  if (fee > 0) {
+    tx = NewUTXOTransaction(from, to, amount, fee, bc, wallets);
+  }
+  return tx;
 }
 
 int main(int argc, char** argv) {
@@ -255,6 +287,8 @@ int main(int argc, char** argv) {
     std::string from = GetArgValue(argc, argv, "-from");
     std::string to = GetArgValue(argc, argv, "-to");
     std::string amountStr = GetArgValue(argc, argv, "-amount");
+    std::string feeStr = GetArgValue(argc, argv, "-fee");
+    std::string feeRateStr = GetArgValue(argc, argv, "-feerate");
     std::string peersArg = GetArgValue(argc, argv, "-peers");
     std::vector<std::string> peers = SplitList(peersArg);
     bool mine = GetBoolFlag(argc, argv, "-mine", true);
@@ -280,7 +314,34 @@ int main(int argc, char** argv) {
       return 1;
     }
 
-    Transaction tx = NewUTXOTransaction(from, to, amount, bc, wallets);
+    int64_t feeRate = -1;
+    if (!feeRateStr.empty()) {
+      feeRate = std::stoll(feeRateStr);
+      if (feeRate < 0) {
+        std::cerr << "Fee rate must be >= 0\n";
+        return 1;
+      }
+    }
+
+    Transaction tx;
+    if (feeRate >= 0) {
+      tx = BuildTxWithFeeRate(from, to, amount, feeRate, bc, wallets);
+    } else {
+      if (feeStr.empty() || feeStr == "auto" || feeStr == "AUTO") {
+        int64_t estRate = bc.EstimateFeeRate(10);
+        if (estRate < kMinRelayFeePerKb) {
+          estRate = kMinRelayFeePerKb;
+        }
+        tx = BuildTxWithFeeRate(from, to, amount, estRate, bc, wallets);
+      } else {
+        int64_t fee = std::stoll(feeStr);
+        if (fee < 0) {
+          std::cerr << "Fee must be >= 0\n";
+          return 1;
+        }
+        tx = NewUTXOTransaction(from, to, amount, fee, bc, wallets);
+      }
+    }
     if (tx.id.empty()) {
       std::cerr << "Transaction error (invalid addresses or insufficient funds)\n";
       return 1;
@@ -305,11 +366,27 @@ int main(int argc, char** argv) {
       return 0;
     }
 
-    if (!bc.AddBlock({tx})) {
-      std::cerr << "Failed to add block\n";
+    std::cerr << "No peers specified. Use -mine true or broadcast to peers.\n";
+    return 1;
+  }
+
+  if (command == "estimatefee") {
+    std::string blocksStr = GetArgValue(argc, argv, "-blocks");
+    int blocksCount = 10;
+    if (!blocksStr.empty()) {
+      blocksCount = std::stoi(blocksStr);
+    }
+    if (blocksCount <= 0) {
+      std::cerr << "-blocks must be > 0\n";
       return 1;
     }
-    std::cout << "Success! Transaction included in a block (no mining reward).\n";
+    Blockchain bc;
+    if (!Blockchain::Load(bc)) {
+      std::cerr << "Blockchain not found. Create it first.\n";
+      return 1;
+    }
+    int64_t rate = bc.EstimateFeeRate(blocksCount);
+    std::cout << "Estimated fee rate: " << rate << " per KB\n";
     return 0;
   }
 

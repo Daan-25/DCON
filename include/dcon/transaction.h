@@ -44,11 +44,11 @@ struct Transaction {
 
 TXOutput NewTXOutput(int64_t value, const std::string& address);
 Transaction NewCoinbaseTX(const std::string& to, const std::string& data,
-                          int height);
+                          int height, int64_t fees);
 
 struct Wallets;
 class Blockchain;
 
 Transaction NewUTXOTransaction(const std::string& from, const std::string& to,
-                               int64_t amount, Blockchain& bc,
+                               int64_t amount, int64_t fee, Blockchain& bc,
                                const Wallets& wallets);

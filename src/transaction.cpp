@@ -194,14 +194,18 @@ TXOutput NewTXOutput(int64_t value, const std::string& address) {
 }
 
 Transaction NewCoinbaseTX(const std::string& to, const std::string& data,
-                          int height) {
+                          int height, int64_t fees) {
   Transaction tx;
   TXInput in;
   in.txid = Bytes{};
   in.vout = -1;
   in.signature = Bytes{};
   in.pubKey = Bytes(data.begin(), data.end());
-  TXOutput out = NewTXOutput(BlockSubsidy(height), to);
+  int64_t reward = BlockSubsidy(height);
+  if (fees > 0) {
+    reward += fees;
+  }
+  TXOutput out = NewTXOutput(reward, to);
   tx.vin.push_back(in);
   tx.vout.push_back(out);
   tx.id = tx.Hash();
@@ -209,7 +213,7 @@ Transaction NewCoinbaseTX(const std::string& to, const std::string& data,
 }
 
 Transaction NewUTXOTransaction(const std::string& from, const std::string& to,
-                               int64_t amount, Blockchain& bc,
+                               int64_t amount, int64_t fee, Blockchain& bc,
                                const Wallets& wallets) {
   Transaction tx;
   if (!ValidateAddress(from) || !ValidateAddress(to)) {
@@ -219,11 +223,18 @@ Transaction NewUTXOTransaction(const std::string& from, const std::string& to,
   if (!wallet) {
     return tx;
   }
+  if (fee < 0) {
+    return tx;
+  }
 
   Bytes pubKeyHash = Hash160(wallet->PublicKey());
   std::unordered_map<std::string, std::vector<int64_t>> validOutputs;
-  int64_t acc = bc.FindSpendableOutputs(pubKeyHash, amount, validOutputs);
-  if (acc < amount) {
+  int64_t target = amount + fee;
+  if (target < amount) {
+    return tx;
+  }
+  int64_t acc = bc.FindSpendableOutputs(pubKeyHash, target, validOutputs);
+  if (acc < target) {
     return tx;
   }
 
@@ -239,8 +250,8 @@ Transaction NewUTXOTransaction(const std::string& from, const std::string& to,
   }
 
   tx.vout.push_back(NewTXOutput(amount, to));
-  if (acc > amount) {
-    tx.vout.push_back(NewTXOutput(acc - amount, from));
+  if (acc > target) {
+    tx.vout.push_back(NewTXOutput(acc - target, from));
   }
 
   if (!bc.SignTransaction(tx, wallet->key.get())) {

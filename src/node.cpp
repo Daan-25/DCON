@@ -105,7 +105,7 @@ static std::unordered_map<std::string, Transaction> CollectNonCoinbaseTxs(
 namespace {
 constexpr uint32_t kInvTx = 1;
 constexpr uint32_t kInvBlock = 2;
-constexpr const char* kUserAgent = "dcon/0.1";
+constexpr const char* kUserAgent = "dcon/0.2";
 
 struct VersionInfo {
   int version = 0;
@@ -199,6 +199,23 @@ bool ParseInvPayload(const Bytes& payload,
   }
   return true;
 }
+
+Bytes BuildCmpctBlockPayload(const Block& block) {
+  ByteWriter w;
+  w.WriteBytes(block.SerializeHeader());
+  Bytes cb = block.transactions.empty() ? Bytes{} : block.transactions[0].Serialize(true);
+  w.WriteBytes(cb);
+  uint32_t count = 0;
+  if (block.transactions.size() > 1) {
+    count = static_cast<uint32_t>(
+        std::min<size_t>(kMaxInvPerMessage, block.transactions.size() - 1));
+  }
+  w.WriteU32(count);
+  for (size_t i = 1; i < block.transactions.size() && i <= count; ++i) {
+    w.WriteBytes(block.transactions[i].id);
+  }
+  return w.data;
+}
 }  // namespace
 
 bool Node::LoadChain() {
@@ -234,6 +251,28 @@ bool Node::IsSelfAddress(const std::string& peer) const {
   return false;
 }
 
+bool Node::IsBanned(const std::string& peer) const {
+  if (peer.empty()) {
+    return false;
+  }
+  auto it = bannedUntil.find(peer);
+  if (it == bannedUntil.end()) {
+    return false;
+  }
+  int64_t now = static_cast<int64_t>(std::time(nullptr));
+  return it->second > now;
+}
+
+void Node::BanPeer(const std::string& peer, const std::string& reason) {
+  if (peer.empty()) {
+    return;
+  }
+  int64_t now = static_cast<int64_t>(std::time(nullptr));
+  bannedUntil[peer] = now + kBanSeconds;
+  peers.erase(std::remove(peers.begin(), peers.end(), peer), peers.end());
+  std::cerr << "Banned peer " << peer << ": " << reason << "\n";
+}
+
 bool Node::LoadPeersFile() {
   if (!FileExists(PeersFile())) {
     return true;
@@ -250,23 +289,87 @@ bool Node::LoadPeersFile() {
     if (line.empty()) {
       continue;
     }
-    AddKnownPeer(line);
+    std::vector<std::string> parts;
+    std::stringstream ss(line);
+    std::string part;
+    while (std::getline(ss, part, '|')) {
+      parts.push_back(part);
+    }
+    if (parts.empty()) {
+      continue;
+    }
+    int64_t lastSeen = 0;
+    int64_t lastSuccess = 0;
+    int64_t lastTry = 0;
+    int attempts = 0;
+    bool tried = false;
+    if (parts.size() >= 2) {
+      try {
+        lastSeen = std::stoll(parts[1]);
+      } catch (...) {
+        lastSeen = 0;
+      }
+    }
+    if (parts.size() >= 3) {
+      try {
+        lastSuccess = std::stoll(parts[2]);
+      } catch (...) {
+        lastSuccess = 0;
+      }
+    }
+    if (parts.size() >= 4) {
+      try {
+        attempts = std::stoi(parts[3]);
+      } catch (...) {
+        attempts = 0;
+      }
+    }
+    if (parts.size() >= 5) {
+      try {
+        lastTry = std::stoll(parts[4]);
+      } catch (...) {
+        lastTry = 0;
+      }
+    }
+    if (parts.size() >= 6) {
+      tried = (parts[5] == "1" || parts[5] == "true");
+    }
+    AddKnownPeer(parts[0], lastSeen);
+    auto it = peerTable.find(parts[0]);
+    if (it != peerTable.end()) {
+      it->second.lastSuccess = lastSuccess;
+      it->second.lastTry = lastTry;
+      it->second.attempts = attempts;
+      it->second.tried = tried;
+    }
   }
   return true;
 }
 
 void Node::SavePeersFile() const {
   std::string out;
-  out.reserve(knownPeers.size() * 32);
-  for (const auto& peer : knownPeers) {
+  out.reserve(peerTable.size() * 48);
+  for (const auto& kv : peerTable) {
+    const auto& peer = kv.first;
+    const auto& info = kv.second;
     out += peer;
+    out.push_back('|');
+    out += std::to_string(info.lastSeen);
+    out.push_back('|');
+    out += std::to_string(info.lastSuccess);
+    out.push_back('|');
+    out += std::to_string(info.attempts);
+    out.push_back('|');
+    out += std::to_string(info.lastTry);
+    out.push_back('|');
+    out += (info.tried ? "1" : "0");
     out.push_back('\n');
   }
   Bytes data(out.begin(), out.end());
   WriteFileBytes(PeersFile(), data);
 }
 
-void Node::AddKnownPeer(const std::string& peer) {
+void Node::AddKnownPeer(const std::string& peer, int64_t lastSeen) {
   int port = 0;
   if (!ParsePeerPort(peer, port)) {
     return;
@@ -274,16 +377,88 @@ void Node::AddKnownPeer(const std::string& peer) {
   if (IsSelfAddress(peer)) {
     return;
   }
-  if (knownPeers.size() >= kMaxKnownPeers) {
+  if (IsBanned(peer)) {
     return;
   }
-  knownPeers.insert(peer);
+  int64_t now = static_cast<int64_t>(std::time(nullptr));
+  if (lastSeen <= 0) {
+    lastSeen = now;
+  }
+  auto& info = peerTable[peer];
+  if (info.lastSeen == 0 || lastSeen > info.lastSeen) {
+    info.lastSeen = lastSeen;
+  }
+  if (peerTable.size() > kMaxKnownPeers) {
+    std::string worstPeer;
+    double worstScore = std::numeric_limits<double>::max();
+    for (const auto& kv : peerTable) {
+      if (kv.first == peer) {
+        continue;
+      }
+      double score = PeerScore(kv.second, now);
+      if (score < worstScore) {
+        worstScore = score;
+        worstPeer = kv.first;
+      }
+    }
+    if (!worstPeer.empty()) {
+      peerTable.erase(worstPeer);
+    }
+  }
 }
 
-void Node::AddKnownPeers(const std::vector<std::string>& addrs) {
+void Node::AddKnownPeers(const std::vector<std::string>& addrs, int64_t lastSeen) {
   for (const auto& peer : addrs) {
-    AddKnownPeer(peer);
+    AddKnownPeer(peer, lastSeen);
   }
+}
+
+void Node::MarkPeerAttempt(const std::string& peer) {
+  if (peer.empty()) {
+    return;
+  }
+  auto& info = peerTable[peer];
+  int64_t now = static_cast<int64_t>(std::time(nullptr));
+  info.lastTry = now;
+  info.attempts += 1;
+}
+
+void Node::MarkPeerSuccess(const std::string& peer) {
+  if (peer.empty()) {
+    return;
+  }
+  auto& info = peerTable[peer];
+  int64_t now = static_cast<int64_t>(std::time(nullptr));
+  info.lastSuccess = now;
+  info.lastSeen = now;
+  info.attempts = 0;
+  info.tried = true;
+}
+
+bool Node::IsTerriblePeer(const PeerInfo& info, int64_t now) const {
+  if (info.lastSeen > 0 && now - info.lastSeen > kPeerStaleSeconds) {
+    return true;
+  }
+  if (info.lastTry > 0 && now - info.lastTry < kPeerFailWindowSeconds &&
+      info.attempts >= kPeerMaxFailures) {
+    return true;
+  }
+  return false;
+}
+
+double Node::PeerScore(const PeerInfo& info, int64_t now) const {
+  if (IsTerriblePeer(info, now)) {
+    return -1e9;
+  }
+  double score = info.tried ? 1000.0 : 0.0;
+  if (info.lastSuccess > 0) {
+    score += 500.0 - (static_cast<double>(now - info.lastSuccess) / 3600.0);
+  }
+  if (info.lastSeen > 0) {
+    score += 100.0 - (static_cast<double>(now - info.lastSeen) / 3600.0);
+  }
+  score -= static_cast<double>(info.attempts) * 50.0;
+  return score;
 }
 
 void Node::SelectOutboundPeers() {
@@ -295,6 +470,9 @@ void Node::SelectOutboundPeers() {
     if (IsSelfAddress(peer)) {
       continue;
     }
+    if (IsBanned(peer)) {
+      continue;
+    }
     int port = 0;
     if (!ParsePeerPort(peer, port)) {
       continue;
@@ -302,30 +480,74 @@ void Node::SelectOutboundPeers() {
     peers.push_back(peer);
   }
 
-  std::vector<std::string> candidates;
-  candidates.reserve(knownPeers.size());
-  for (const auto& peer : knownPeers) {
+  int64_t now = static_cast<int64_t>(std::time(nullptr));
+  std::vector<std::pair<std::string, double>> tried;
+  std::vector<std::pair<std::string, double>> fresh;
+  tried.reserve(peerTable.size());
+  fresh.reserve(peerTable.size());
+  for (const auto& kv : peerTable) {
+    const auto& peer = kv.first;
     if (IsSelfAddress(peer)) {
+      continue;
+    }
+    if (IsBanned(peer)) {
       continue;
     }
     if (std::find(peers.begin(), peers.end(), peer) != peers.end()) {
       continue;
     }
-    candidates.push_back(peer);
+    double score = PeerScore(kv.second, now);
+    if (score < -1e8) {
+      continue;
+    }
+    if (kv.second.tried) {
+      tried.emplace_back(peer, score);
+    } else {
+      fresh.emplace_back(peer, score);
+    }
   }
-  std::mt19937 rng(std::random_device{}());
-  std::shuffle(candidates.begin(), candidates.end(), rng);
 
-  for (const auto& peer : candidates) {
+  auto sortScore = [](const auto& a, const auto& b) {
+    return a.second > b.second;
+  };
+  std::sort(tried.begin(), tried.end(), sortScore);
+  std::sort(fresh.begin(), fresh.end(), sortScore);
+
+  size_t triedTarget = kMaxOutboundPeers / 2;
+  for (const auto& item : tried) {
     if (peers.size() >= kMaxOutboundPeers) {
       break;
     }
-    peers.push_back(peer);
+    if (peers.size() < triedTarget) {
+      peers.push_back(item.first);
+    }
+  }
+  for (const auto& item : tried) {
+    if (peers.size() >= kMaxOutboundPeers) {
+      break;
+    }
+    if (std::find(peers.begin(), peers.end(), item.first) == peers.end()) {
+      peers.push_back(item.first);
+    }
+  }
+  for (const auto& item : fresh) {
+    if (peers.size() >= kMaxOutboundPeers) {
+      break;
+    }
+    peers.push_back(item.first);
   }
 }
 
 void Node::RequestFromPeer(const std::string& peer, const std::string& type,
                            const Bytes& payload) {
+  if (IsBanned(peer)) {
+    return;
+  }
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    MarkPeerAttempt(peer);
+    SavePeersFile();
+  }
   SocketHandle sock = ConnectToPeer(peer);
   if (!IsValidSocket(sock)) {
     return;
@@ -335,9 +557,19 @@ void Node::RequestFromPeer(const std::string& peer, const std::string& type,
   SendMessage(sock, "version", version);
   SendMessage(sock, type, payload);
 
+  bool success = false;
   std::string rtype;
   Bytes rpayload;
   while (ReceiveMessage(sock, rtype, rpayload)) {
+    if (!success) {
+      {
+        std::lock_guard<std::mutex> lock(mutex);
+        MarkPeerSuccess(peer);
+        SavePeersFile();
+        SelectOutboundPeers();
+      }
+      success = true;
+    }
     HandleMessage(rtype, rpayload, sock, peer);
   }
   CloseSocket(sock);
@@ -346,7 +578,7 @@ void Node::RequestFromPeer(const std::string& peer, const std::string& type,
 void Node::BootstrapPeers() {
   std::lock_guard<std::mutex> lock(mutex);
   LoadPeersFile();
-  AddKnownPeers(bootstrapPeers);
+  AddKnownPeers(bootstrapPeers, 0);
 
   if (!announceAddress.empty()) {
     int port = 0;
@@ -357,7 +589,7 @@ void Node::BootstrapPeers() {
 
   for (const auto& seed : seeds) {
     auto resolved = ResolveSeedPeers(seed, listenPort, kMaxAddrPerMessage);
-    AddKnownPeers(resolved);
+    AddKnownPeers(resolved, 0);
   }
 
   SelectOutboundPeers();
@@ -439,6 +671,11 @@ void Node::BroadcastInv(const std::vector<Bytes>& txs,
   Broadcast("inv", payload);
 }
 
+void Node::BroadcastCompactBlock(const Block& block) {
+  Bytes payload = BuildCmpctBlockPayload(block);
+  Broadcast("cmpctblock", payload);
+}
+
 void Node::RequestBlocks() {
   Bytes empty;
   std::vector<std::string> snapshot;
@@ -502,20 +739,25 @@ void Node::RequestPeers() {
 
 Bytes Node::BuildAddrPayload(size_t maxCount) const {
   ByteWriter w;
-  std::vector<std::string> addrs;
-  addrs.reserve(std::min(maxCount, knownPeers.size() + 1));
-  for (const auto& peer : knownPeers) {
+  std::vector<std::pair<std::string, int64_t>> addrs;
+  addrs.reserve(std::min(maxCount, peerTable.size() + 1));
+  int64_t now = static_cast<int64_t>(std::time(nullptr));
+  for (const auto& kv : peerTable) {
     if (addrs.size() >= maxCount) {
       break;
     }
-    addrs.push_back(peer);
+    if (IsTerriblePeer(kv.second, now)) {
+      continue;
+    }
+    addrs.emplace_back(kv.first, kv.second.lastSeen);
   }
   if (!announceAddress.empty() && addrs.size() < maxCount) {
-    addrs.push_back(announceAddress);
+    addrs.emplace_back(announceAddress, now);
   }
   w.WriteU32(static_cast<uint32_t>(addrs.size()));
-  for (const auto& addr : addrs) {
-    w.WriteString(addr);
+  for (const auto& item : addrs) {
+    w.WriteI64(item.second);
+    w.WriteString(item.first);
   }
   return w.data;
 }
@@ -530,13 +772,20 @@ void Node::OnAddr(const Bytes& payload) {
     count = static_cast<uint32_t>(kMaxAddrPerMessage);
   }
   std::vector<std::string> addrs;
+  std::vector<int64_t> seen;
   addrs.reserve(count);
+  seen.reserve(count);
   for (uint32_t i = 0; i < count; ++i) {
+    int64_t ts = 0;
+    if (!r.ReadI64(ts)) {
+      break;
+    }
     std::string addr;
     if (!r.ReadString(addr)) {
       break;
     }
     addrs.push_back(addr);
+    seen.push_back(ts);
   }
   if (addrs.empty()) {
     return;
@@ -545,9 +794,11 @@ void Node::OnAddr(const Bytes& payload) {
   bool changed = false;
   {
     std::lock_guard<std::mutex> lock(mutex);
-    size_t before = knownPeers.size();
-    AddKnownPeers(addrs);
-    if (knownPeers.size() != before) {
+    size_t before = peerTable.size();
+    for (size_t i = 0; i < addrs.size(); ++i) {
+      AddKnownPeer(addrs[i], seen[i]);
+    }
+    if (peerTable.size() != before) {
       changed = true;
       SelectOutboundPeers();
       SavePeersFile();
@@ -631,7 +882,7 @@ void Node::OnGetData(const Bytes& payload, int client) {
         std::lock_guard<std::mutex> lock(mutex);
         auto it = mempool.find(BytesToHex(item.second));
         if (it != mempool.end()) {
-          tx = it->second;
+          tx = it->second.tx;
           have = true;
         }
       }
@@ -655,6 +906,143 @@ void Node::OnGetData(const Bytes& payload, int client) {
       }
     }
   }
+}
+
+void Node::OnCmpctBlock(const Bytes& payload, int client,
+                        const std::string& peerAddr) {
+  ByteReader r{payload};
+  Bytes headerBytes;
+  if (!r.ReadBytes(headerBytes)) {
+    return;
+  }
+  Block header = Block::DeserializeHeader(headerBytes);
+
+  bool needHeaders = false;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (!header.prevBlockHash.empty()) {
+      std::string prevKey = BytesToHex(header.prevBlockHash);
+      auto it = blockIndex.find(prevKey);
+      if (it != blockIndex.end()) {
+        if (!ValidateHeader(header, &it->second)) {
+          if (!peerAddr.empty()) {
+            BanPeer(peerAddr, "invalid compact header");
+          }
+          return;
+        }
+      } else {
+        needHeaders = true;
+      }
+    } else {
+      if (header.height != 0 || !ValidateHeader(header, nullptr)) {
+        if (!peerAddr.empty()) {
+          BanPeer(peerAddr, "invalid compact header");
+        }
+        return;
+      }
+    }
+  }
+  if (needHeaders) {
+    RequestHeaders();
+    return;
+  }
+
+  Bytes cbBytes;
+  if (!r.ReadBytes(cbBytes)) {
+    return;
+  }
+  ByteReader tr{cbBytes};
+  Transaction coinbase = Transaction::Deserialize(tr);
+
+  uint32_t count = 0;
+  if (!r.ReadU32(count)) {
+    return;
+  }
+  if (count > kMaxInvPerMessage) {
+    count = static_cast<uint32_t>(kMaxInvPerMessage);
+  }
+  std::vector<Bytes> txids;
+  txids.reserve(count);
+  for (uint32_t i = 0; i < count; ++i) {
+    Bytes id;
+    if (!r.ReadBytes(id)) {
+      break;
+    }
+    txids.push_back(std::move(id));
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (blockIndex.find(BytesToHex(header.hash)) != blockIndex.end()) {
+      return;
+    }
+  }
+
+  std::vector<Transaction> txs;
+  txs.reserve(txids.size() + 1);
+  txs.push_back(coinbase);
+  std::vector<Bytes> missing;
+
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    for (const auto& id : txids) {
+      auto it = mempool.find(BytesToHex(id));
+      if (it != mempool.end()) {
+        txs.push_back(it->second.tx);
+      } else {
+        missing.push_back(id);
+      }
+    }
+  }
+
+  if (!missing.empty()) {
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      pendingBlocks.insert(BytesToHex(header.hash));
+    }
+    Bytes req = BuildInvPayload({}, {header.hash});
+    if (!peerAddr.empty()) {
+      SocketHandle sock = ConnectToPeer(peerAddr);
+      if (IsValidSocket(sock)) {
+        SetSocketTimeoutMs(sock, 5000);
+        Bytes version = BuildVersionPayload(*this);
+        SendMessage(sock, "version", version);
+        SendMessage(sock, "getdata", req);
+        std::string type;
+        Bytes payload2;
+        while (ReceiveMessage(sock, type, payload2)) {
+          HandleMessage(type, payload2, sock, peerAddr);
+        }
+        CloseSocket(sock);
+      }
+    } else {
+      SendMessage(client, "getdata", req);
+    }
+    return;
+  }
+
+  Block block = header;
+  block.transactions = std::move(txs);
+  Block parentCopy;
+  bool haveParent = false;
+  if (!header.prevBlockHash.empty()) {
+    std::lock_guard<std::mutex> lock(mutex);
+    auto it = blockIndex.find(BytesToHex(header.prevBlockHash));
+    if (it != blockIndex.end()) {
+      parentCopy = it->second;
+      haveParent = true;
+    }
+  }
+  if (haveParent) {
+    if (!ValidateBlock(block, &parentCopy)) {
+      if (!peerAddr.empty()) {
+        std::lock_guard<std::mutex> lock(mutex);
+        BanPeer(peerAddr, "invalid compact block");
+      }
+      return;
+    }
+  }
+  OnBlock(block);
 }
 
 void Node::OnGetHeaders(const Bytes& payload, int client) {
@@ -741,6 +1129,7 @@ void Node::OnHeaders(const Bytes& payload, int client, const std::string& peerAd
 
   std::vector<Bytes> requestBlocks;
   bool requestMore = false;
+  bool invalid = false;
   {
     std::lock_guard<std::mutex> lock(mutex);
     Blockchain temp = chain;
@@ -748,10 +1137,12 @@ void Node::OnHeaders(const Bytes& payload, int client, const std::string& peerAd
     for (const auto& h : headers) {
       const Block* prev = temp.blocks.empty() ? nullptr : &temp.blocks.back();
       if (!ValidateHeader(h, prev)) {
+        invalid = true;
         break;
       }
       int expectedBits = temp.NextTargetBits();
       if (h.targetBits != expectedBits) {
+        invalid = true;
         break;
       }
       temp.blocks.push_back(h);
@@ -763,6 +1154,12 @@ void Node::OnHeaders(const Bytes& payload, int client, const std::string& peerAd
       }
     }
     requestMore = headers.size() >= kMaxHeadersPerMessage;
+  }
+
+  if (invalid && !peerAddr.empty()) {
+    std::lock_guard<std::mutex> lock(mutex);
+    BanPeer(peerAddr, "invalid headers");
+    return;
   }
 
   if (!requestBlocks.empty()) {
@@ -805,8 +1202,103 @@ void Node::OnPing(const Bytes& payload, int client) {
 
 void Node::RemoveMempoolTxs(const Block& block) {
   for (const auto& tx : block.transactions) {
-    mempool.erase(BytesToHex(tx.id));
+    EraseMempoolTx(BytesToHex(tx.id));
   }
+}
+
+bool Node::HasMempoolConflict(const Transaction& tx) const {
+  for (const auto& in : tx.vin) {
+    std::string key = BytesToHex(in.txid) + ":" + std::to_string(in.vout);
+    if (mempoolSpent.find(key) != mempoolSpent.end()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void Node::EraseMempoolTx(const std::string& txid) {
+  auto it = mempool.find(txid);
+  if (it == mempool.end()) {
+    return;
+  }
+  for (const auto& in : it->second.inputs) {
+    mempoolSpent.erase(in);
+  }
+  if (mempoolBytes >= it->second.size) {
+    mempoolBytes -= it->second.size;
+  } else {
+    mempoolBytes = 0;
+  }
+  mempool.erase(it);
+}
+
+bool Node::TryAddMempool(const Transaction& tx, int height) {
+  if (tx.id.empty()) {
+    return false;
+  }
+  std::string txid = BytesToHex(tx.id);
+  if (mempool.find(txid) != mempool.end()) {
+    return false;
+  }
+  if (!chain.VerifyTransactionAtHeight(tx, height)) {
+    return false;
+  }
+  bool ok = false;
+  int64_t fee = chain.CalculateTxFee(tx, height, ok);
+  if (!ok) {
+    return false;
+  }
+  size_t size = tx.Serialize(true).size();
+  if (size == 0) {
+    return false;
+  }
+  int64_t feeRate = (fee * 1000) / static_cast<int64_t>(size);
+  if (feeRate < kMinRelayFeePerKb) {
+    return false;
+  }
+  if (size > kMaxMempoolBytes) {
+    return false;
+  }
+  if (HasMempoolConflict(tx)) {
+    return false;
+  }
+
+  MempoolEntry entry;
+  entry.tx = tx;
+  entry.fee = fee;
+  entry.size = size;
+  entry.feeRate = feeRate;
+  entry.inputs.reserve(tx.vin.size());
+  for (const auto& in : tx.vin) {
+    entry.inputs.push_back(BytesToHex(in.txid) + ":" + std::to_string(in.vout));
+  }
+
+  while ((mempoolBytes + entry.size) > kMaxMempoolBytes ||
+         mempool.size() >= kMaxMempoolTx) {
+    std::string worstTx;
+    int64_t worstRate = std::numeric_limits<int64_t>::max();
+    int64_t worstFee = std::numeric_limits<int64_t>::max();
+    for (const auto& kv : mempool) {
+      const auto& e = kv.second;
+      if (e.feeRate < worstRate ||
+          (e.feeRate == worstRate && e.fee < worstFee)) {
+        worstRate = e.feeRate;
+        worstFee = e.fee;
+        worstTx = kv.first;
+      }
+    }
+    if (worstTx.empty() || feeRate <= worstRate) {
+      return false;
+    }
+    EraseMempoolTx(worstTx);
+  }
+
+  mempoolBytes += entry.size;
+  for (const auto& in : entry.inputs) {
+    mempoolSpent.insert(in);
+  }
+  mempool[txid] = std::move(entry);
+  return true;
 }
 
 void Node::TryMine() {
@@ -822,16 +1314,19 @@ void Node::TryMine() {
       return;
     }
     for (const auto& kv : mempool) {
-      txs.push_back(kv.second);
+      txs.push_back(kv.second.tx);
     }
     mempool.clear();
+    mempoolBytes = 0;
+    mempoolSpent.clear();
 
     if (chain.MineBlock(txs, minerAddress)) {
       minedBlock = chain.blocks.back();
       mined = true;
     } else {
       for (const auto& tx : txs) {
-        mempool[BytesToHex(tx.id)] = tx;
+        int nextHeight = chain.blocks.empty() ? 0 : chain.blocks.back().height + 1;
+        TryAddMempool(tx, nextHeight);
       }
     }
   }
@@ -848,7 +1343,14 @@ void Node::MiningLoop() {
       continue;
     }
 
-    std::vector<Transaction> selected;
+    struct Candidate {
+      Transaction tx;
+      int64_t fee = 0;
+      size_t size = 0;
+      int64_t feeRate = 0;
+    };
+
+    std::vector<Candidate> candidates;
     Bytes prevHash;
     int nextHeight = 0;
     int targetBits = kInitialTargetBits;
@@ -860,13 +1362,65 @@ void Node::MiningLoop() {
       targetBits = chain.NextTargetBits();
 
       for (const auto& kv : mempool) {
-        if (chain.VerifyTransactionAtHeight(kv.second, nextHeight)) {
-          selected.push_back(kv.second);
+        const auto& entry = kv.second;
+        if (!chain.VerifyTransactionAtHeight(entry.tx, nextHeight)) {
+          continue;
         }
+        if (entry.feeRate < kMinRelayFeePerKb) {
+          continue;
+        }
+        Candidate cand;
+        cand.tx = entry.tx;
+        cand.fee = entry.fee;
+        cand.size = entry.size;
+        cand.feeRate = entry.feeRate;
+        candidates.push_back(std::move(cand));
       }
     }
 
-    Transaction coinbase = NewCoinbaseTX(minerAddress, "", nextHeight);
+    std::sort(candidates.begin(), candidates.end(),
+              [](const Candidate& a, const Candidate& b) {
+                if (a.feeRate != b.feeRate) {
+                  return a.feeRate > b.feeRate;
+                }
+                return a.fee > b.fee;
+              });
+
+    std::vector<Transaction> selected;
+    selected.reserve(candidates.size());
+    std::unordered_set<std::string> spent;
+    int64_t totalFees = 0;
+    size_t currentSize = 0;
+
+    size_t sizeLimit = kMaxBlockBytes > 256 ? kMaxBlockBytes - 256 : kMaxBlockBytes;
+    for (const auto& cand : candidates) {
+      if (currentSize + cand.size > sizeLimit) {
+        continue;
+      }
+      bool conflict = false;
+      for (const auto& in : cand.tx.vin) {
+        std::string key = BytesToHex(in.txid) + ":" + std::to_string(in.vout);
+        if (spent.find(key) != spent.end()) {
+          conflict = true;
+          break;
+        }
+      }
+      if (conflict) {
+        continue;
+      }
+      for (const auto& in : cand.tx.vin) {
+        std::string key = BytesToHex(in.txid) + ":" + std::to_string(in.vout);
+        spent.insert(key);
+      }
+      selected.push_back(cand.tx);
+      currentSize += cand.size;
+      if (totalFees > std::numeric_limits<int64_t>::max() - cand.fee) {
+        continue;
+      }
+      totalFees += cand.fee;
+    }
+
+    Transaction coinbase = NewCoinbaseTX(minerAddress, "", nextHeight, totalFees);
     std::vector<Transaction> all = selected;
     all.insert(all.begin(), coinbase);
     Block candidate = NewBlock(all, prevHash, nextHeight, targetBits);
@@ -884,14 +1438,7 @@ void Node::MiningLoop() {
       if (!ValidateBlock(candidate, prev)) {
         continue;
       }
-      bool ok = true;
-      for (const auto& tx : candidate.transactions) {
-        if (!chain.VerifyTransactionAtHeight(tx, candidate.height)) {
-          ok = false;
-          break;
-        }
-      }
-      if (!ok) {
+      if (!chain.ValidateBlockTransactions(candidate)) {
         continue;
       }
       chain.blocks.push_back(candidate);
@@ -905,6 +1452,7 @@ void Node::MiningLoop() {
       std::cout << "Mined block " << candidate.height << " "
                 << BytesToHex(candidate.hash) << "\n";
       BroadcastInv({}, {candidate.hash});
+      BroadcastCompactBlock(candidate);
     }
   }
 }
@@ -916,14 +1464,8 @@ void Node::OnTx(const Transaction& tx) {
   bool added = false;
   {
     std::lock_guard<std::mutex> lock(mutex);
-    std::string txid = BytesToHex(tx.id);
-    if (mempool.find(txid) == mempool.end()) {
-      int nextHeight = chain.blocks.empty() ? 0 : chain.blocks.back().height + 1;
-      if (chain.VerifyTransactionAtHeight(tx, nextHeight)) {
-        mempool[txid] = tx;
-        added = true;
-      }
-    }
+    int nextHeight = chain.blocks.empty() ? 0 : chain.blocks.back().height + 1;
+    added = TryAddMempool(tx, nextHeight);
   }
 
   if (added) {
@@ -985,10 +1527,8 @@ void Node::OnBlock(const Block& block) {
       }
       Blockchain temp;
       temp.blocks = parentChain;
-      for (const auto& tx : block.transactions) {
-        if (!temp.VerifyTransactionAtHeight(tx, block.height)) {
-          return;
-        }
+      if (!temp.ValidateBlockTransactions(block)) {
+        return;
       }
 
       uint64_t work = AddWork(parentWork, BlockWork(block.targetBits));
@@ -1032,20 +1572,21 @@ void Node::OnBlock(const Block& block) {
       auto newTxs = CollectNonCoinbaseTxs(candidate);
       chain.ReplaceWith(candidate);
       mempool.clear();
+      mempoolBytes = 0;
+      mempoolSpent.clear();
       for (const auto& kv : oldTxs) {
         if (newTxs.find(kv.first) != newTxs.end()) {
           continue;
         }
         int nextHeight = chain.blocks.empty() ? 0 : chain.blocks.back().height + 1;
-        if (chain.VerifyTransactionAtHeight(kv.second, nextHeight)) {
-          mempool[kv.first] = kv.second;
-        }
+        TryAddMempool(kv.second, nextHeight);
       }
     }
   }
 
   if (accepted) {
     BroadcastInv({}, {block.hash});
+    BroadcastCompactBlock(block);
   }
 
   bool requestMore = false;
@@ -1088,15 +1629,15 @@ void Node::OnBlocksPayload(const Bytes& payload) {
       auto newTxs = CollectNonCoinbaseTxs(incoming);
       chain.ReplaceWith(incoming);
       mempool.clear();
+      mempoolBytes = 0;
+      mempoolSpent.clear();
       pendingBlocks.clear();
       for (const auto& kv : oldTxs) {
         if (newTxs.find(kv.first) != newTxs.end()) {
           continue;
         }
         int nextHeight = chain.blocks.empty() ? 0 : chain.blocks.back().height + 1;
-        if (chain.VerifyTransactionAtHeight(kv.second, nextHeight)) {
-          mempool[kv.first] = kv.second;
-        }
+        TryAddMempool(kv.second, nextHeight);
       }
       BuildIndexFromChain();
       replaced = true;
@@ -1105,17 +1646,22 @@ void Node::OnBlocksPayload(const Bytes& payload) {
 
   if (replaced) {
     BroadcastInv({}, {chain.blocks.back().hash});
+    BroadcastCompactBlock(chain.blocks.back());
   }
 }
 
 void Node::HandleMessage(const std::string& type, const Bytes& payload, int client,
                          const std::string& peerAddr) {
+  if (!peerAddr.empty() && IsBanned(peerAddr)) {
+    return;
+  }
   if (type == "version") {
     VersionInfo info;
     if (ParseVersionPayload(payload, info)) {
       if (!info.addrFrom.empty()) {
         std::lock_guard<std::mutex> lock(mutex);
-        AddKnownPeer(info.addrFrom);
+        AddKnownPeer(info.addrFrom, info.timestamp);
+        MarkPeerSuccess(info.addrFrom);
         SavePeersFile();
         SelectOutboundPeers();
       }
@@ -1137,6 +1683,10 @@ void Node::HandleMessage(const std::string& type, const Bytes& payload, int clie
   }
   if (type == "inv") {
     OnInv(payload, client, peerAddr);
+    return;
+  }
+  if (type == "cmpctblock") {
+    OnCmpctBlock(payload, client, peerAddr);
     return;
   }
   if (type == "getdata") {
@@ -1223,7 +1773,8 @@ void Node::Serve(int port) {
             peerAddr = info.addrFrom;
             if (!peerAddr.empty()) {
               std::lock_guard<std::mutex> lock(mutex);
-              AddKnownPeer(peerAddr);
+              AddKnownPeer(peerAddr, info.timestamp);
+              MarkPeerSuccess(peerAddr);
               SavePeersFile();
               SelectOutboundPeers();
             }

@@ -8,11 +8,28 @@
 #include "dcon/serialize.h"
 
 Bytes Block::HashTransactions() const {
-  Bytes all;
-  for (const auto& tx : transactions) {
-    all.insert(all.end(), tx.id.begin(), tx.id.end());
+  if (transactions.empty()) {
+    return Bytes{};
   }
-  return Sha256(all);
+  std::vector<Bytes> level;
+  level.reserve(transactions.size());
+  for (const auto& tx : transactions) {
+    level.push_back(tx.id);
+  }
+  while (level.size() > 1) {
+    if (level.size() % 2 == 1) {
+      level.push_back(level.back());
+    }
+    std::vector<Bytes> next;
+    next.reserve(level.size() / 2);
+    for (size_t i = 0; i < level.size(); i += 2) {
+      Bytes concat = level[i];
+      concat.insert(concat.end(), level[i + 1].begin(), level[i + 1].end());
+      next.push_back(Sha256(concat));
+    }
+    level.swap(next);
+  }
+  return level.front();
 }
 
 Bytes Block::Serialize() const {

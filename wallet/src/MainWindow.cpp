@@ -211,13 +211,16 @@ void MainWindow::setupUi() {
   sendFromEdit = new QLineEdit();
   sendToEdit = new QLineEdit();
   sendAmountEdit = new QLineEdit();
+  sendFeeEdit = new QLineEdit();
   sendPeersEdit = new QLineEdit();
   sendMineCheck = new QCheckBox("Mine immediately");
   sendMineCheck->setChecked(true);
+  sendFeeEdit->setText("auto");
 
   sendLayout->addRow("From", sendFromEdit);
   sendLayout->addRow("To", sendToEdit);
   sendLayout->addRow("Amount", sendAmountEdit);
+  sendLayout->addRow("Fee (or auto)", sendFeeEdit);
   sendLayout->addRow("Peers (optional)", sendPeersEdit);
   sendLayout->addRow(sendMineCheck);
 
@@ -391,15 +394,17 @@ void MainWindow::setupUi() {
     QString from = sendFromEdit->text().trimmed();
     QString to = sendToEdit->text().trimmed();
     QString amount = sendAmountEdit->text().trimmed();
+    QString fee = sendFeeEdit->text().trimmed();
     QString peers = sendPeersEdit->text().trimmed();
 
-    if (from.isEmpty() || to.isEmpty() || amount.isEmpty()) {
+    if (from.isEmpty() || to.isEmpty() || amount.isEmpty() || fee.isEmpty()) {
       QMessageBox::warning(this, "Missing fields",
-                           "From, To, and Amount are required.");
+                           "From, To, Amount, and Fee are required.");
       return;
     }
 
     QStringList args = {"send", "-from", from, "-to", to, "-amount", amount,
+                        "-fee", fee,
                         "-mine", sendMineCheck->isChecked() ? "true" : "false"};
     if (!peers.isEmpty()) {
       args << "-peers" << peers;

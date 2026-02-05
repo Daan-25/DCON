@@ -31,6 +31,7 @@ class MainWindow : public QWidget {
   QLineEdit* sendFromEdit;
   QLineEdit* sendToEdit;
   QLineEdit* sendAmountEdit;
+  QLineEdit* sendFeeEdit;
   QLineEdit* sendPeersEdit;
   QCheckBox* sendMineCheck;
 

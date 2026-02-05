@@ -1,6 +1,8 @@
 #include "dcon/blockchain.h"
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 #include <unordered_set>
 
 #include "dcon/constants.h"
@@ -56,7 +58,7 @@ bool Blockchain::Create(const std::string& address) {
   if (!ValidateAddress(address)) {
     return false;
   }
-  Transaction coinbase = NewCoinbaseTX(address, kGenesisData, 0);
+  Transaction coinbase = NewCoinbaseTX(address, kGenesisData, 0, 0);
   Block genesis = NewBlock({coinbase}, Bytes{}, 0, kInitialTargetBits);
   blocks.clear();
   blocks.push_back(genesis);
@@ -64,15 +66,16 @@ bool Blockchain::Create(const std::string& address) {
 }
 
 bool Blockchain::AddBlock(const std::vector<Transaction>& txs) {
-  int nextHeight = blocks.empty() ? 0 : blocks.back().height + 1;
-  for (const auto& tx : txs) {
-    if (!VerifyTransactionAtHeight(tx, nextHeight)) {
-      return false;
-    }
+  if (txs.empty() || !txs.front().IsCoinbase()) {
+    return false;
   }
 
+  int nextHeight = blocks.empty() ? 0 : blocks.back().height + 1;
   Bytes prevHash = blocks.empty() ? Bytes{} : blocks.back().hash;
   Block newBlock = NewBlock(txs, prevHash, nextHeight, NextTargetBits());
+  if (!ValidateBlockTransactions(newBlock)) {
+    return false;
+  }
   blocks.push_back(newBlock);
   return Save();
 }
@@ -80,7 +83,19 @@ bool Blockchain::AddBlock(const std::vector<Transaction>& txs) {
 bool Blockchain::MineBlock(const std::vector<Transaction>& txs,
                            const std::string& minerAddress) {
   int nextHeight = blocks.empty() ? 0 : blocks.back().height + 1;
-  Transaction coinbase = NewCoinbaseTX(minerAddress, "", nextHeight);
+  int64_t totalFees = 0;
+  for (const auto& tx : txs) {
+    bool ok = false;
+    int64_t fee = CalculateTxFee(tx, nextHeight, ok);
+    if (!ok) {
+      return false;
+    }
+    if (totalFees > std::numeric_limits<int64_t>::max() - fee) {
+      return false;
+    }
+    totalFees += fee;
+  }
+  Transaction coinbase = NewCoinbaseTX(minerAddress, "", nextHeight, totalFees);
   std::vector<Transaction> all = txs;
   all.insert(all.begin(), coinbase);
   return AddBlock(all);
@@ -98,10 +113,8 @@ bool Blockchain::AddExternalBlock(const Block& block) {
     }
   }
 
-  for (const auto& tx : block.transactions) {
-    if (!VerifyTransactionAtHeight(tx, block.height)) {
-      return false;
-    }
+  if (!ValidateBlockTransactions(block)) {
+    return false;
   }
 
   blocks.push_back(block);
@@ -163,8 +176,25 @@ bool Blockchain::VerifyTransactionAtHeight(const Transaction& tx,
   if (tx.IsCoinbase()) {
     return true;
   }
+  int64_t outSum = 0;
+  for (const auto& out : tx.vout) {
+    if (out.value < 0) {
+      return false;
+    }
+    if (outSum > std::numeric_limits<int64_t>::max() - out.value) {
+      return false;
+    }
+    outSum += out.value;
+  }
   std::unordered_map<std::string, Transaction> prevTXs;
+  std::unordered_set<std::string> seenInputs;
+  int64_t inSum = 0;
   for (const auto& in : tx.vin) {
+    std::string key = BytesToHex(in.txid) + ":" + std::to_string(in.vout);
+    if (seenInputs.find(key) != seenInputs.end()) {
+      return false;
+    }
+    seenInputs.insert(key);
     Transaction prev;
     int prevHeight = 0;
     if (!FindTransaction(in.txid, prev, prevHeight)) {
@@ -173,9 +203,157 @@ bool Blockchain::VerifyTransactionAtHeight(const Transaction& tx,
     if (prev.IsCoinbase() && height - prevHeight < kCoinbaseMaturity) {
       return false;
     }
+    if (in.vout < 0 || static_cast<size_t>(in.vout) >= prev.vout.size()) {
+      return false;
+    }
+    int64_t value = prev.vout[static_cast<size_t>(in.vout)].value;
+    if (value < 0) {
+      return false;
+    }
+    if (inSum > std::numeric_limits<int64_t>::max() - value) {
+      return false;
+    }
+    inSum += value;
     prevTXs[BytesToHex(prev.id)] = prev;
   }
+  if (inSum < outSum) {
+    return false;
+  }
   return tx.Verify(prevTXs);
+}
+
+int64_t Blockchain::CalculateTxFee(const Transaction& tx, int height,
+                                   bool& ok) const {
+  ok = false;
+  if (tx.IsCoinbase()) {
+    ok = true;
+    return 0;
+  }
+  int64_t outSum = 0;
+  for (const auto& out : tx.vout) {
+    if (out.value < 0) {
+      return 0;
+    }
+    if (outSum > std::numeric_limits<int64_t>::max() - out.value) {
+      return 0;
+    }
+    outSum += out.value;
+  }
+  int64_t inSum = 0;
+  std::unordered_set<std::string> seenInputs;
+  for (const auto& in : tx.vin) {
+    std::string key = BytesToHex(in.txid) + ":" + std::to_string(in.vout);
+    if (seenInputs.find(key) != seenInputs.end()) {
+      return 0;
+    }
+    seenInputs.insert(key);
+    Transaction prev;
+    int prevHeight = 0;
+    if (!FindTransaction(in.txid, prev, prevHeight)) {
+      return 0;
+    }
+    if (prev.IsCoinbase() && height - prevHeight < kCoinbaseMaturity) {
+      return 0;
+    }
+    if (in.vout < 0 || static_cast<size_t>(in.vout) >= prev.vout.size()) {
+      return 0;
+    }
+    int64_t value = prev.vout[static_cast<size_t>(in.vout)].value;
+    if (value < 0) {
+      return 0;
+    }
+    if (inSum > std::numeric_limits<int64_t>::max() - value) {
+      return 0;
+    }
+    inSum += value;
+  }
+  if (inSum < outSum) {
+    return 0;
+  }
+  ok = true;
+  return inSum - outSum;
+}
+
+bool Blockchain::ValidateBlockTransactions(const Block& block) const {
+  if (block.transactions.empty()) {
+    return false;
+  }
+  if (!block.transactions.front().IsCoinbase()) {
+    return false;
+  }
+
+  int64_t totalFees = 0;
+  for (size_t i = 1; i < block.transactions.size(); ++i) {
+    const auto& tx = block.transactions[i];
+    if (!VerifyTransactionAtHeight(tx, block.height)) {
+      return false;
+    }
+    bool ok = false;
+    int64_t fee = CalculateTxFee(tx, block.height, ok);
+    if (!ok) {
+      return false;
+    }
+    if (totalFees > std::numeric_limits<int64_t>::max() - fee) {
+      return false;
+    }
+    totalFees += fee;
+  }
+
+  int64_t coinbaseOut = 0;
+  for (const auto& out : block.transactions.front().vout) {
+    if (out.value < 0) {
+      return false;
+    }
+    if (coinbaseOut > std::numeric_limits<int64_t>::max() - out.value) {
+      return false;
+    }
+    coinbaseOut += out.value;
+  }
+
+  int64_t maxReward = BlockSubsidy(block.height);
+  if (totalFees > 0) {
+    maxReward += totalFees;
+  }
+  if (coinbaseOut > maxReward) {
+    return false;
+  }
+  return true;
+}
+
+int64_t Blockchain::EstimateFeeRate(int blocksCount) const {
+  if (blocksCount <= 0) {
+    return kMinRelayFeePerKb;
+  }
+  if (blocks.empty()) {
+    return kMinRelayFeePerKb;
+  }
+  int start = static_cast<int>(blocks.size()) - blocksCount;
+  if (start < 0) {
+    start = 0;
+  }
+  std::vector<int64_t> rates;
+  for (int i = start; i < static_cast<int>(blocks.size()); ++i) {
+    const Block& block = blocks[static_cast<size_t>(i)];
+    for (size_t t = 1; t < block.transactions.size(); ++t) {
+      const auto& tx = block.transactions[t];
+      bool ok = false;
+      int64_t fee = CalculateTxFee(tx, block.height, ok);
+      if (!ok) {
+        continue;
+      }
+      size_t size = tx.Serialize(true).size();
+      if (size == 0) {
+        continue;
+      }
+      int64_t rate = (fee * 1000) / static_cast<int64_t>(size);
+      rates.push_back(rate);
+    }
+  }
+  if (rates.empty()) {
+    return kMinRelayFeePerKb;
+  }
+  std::sort(rates.begin(), rates.end());
+  return rates[rates.size() / 2];
 }
 
 std::vector<TXOutput> Blockchain::FindUTXO(const Bytes& pubKeyHash) const {
@@ -364,10 +542,8 @@ bool ValidateChain(const Blockchain& bc) {
     if (block.targetBits != expectedBits) {
       return false;
     }
-    for (const auto& tx : block.transactions) {
-      if (!tmp.VerifyTransactionAtHeight(tx, block.height)) {
-        return false;
-      }
+    if (!tmp.ValidateBlockTransactions(block)) {
+      return false;
     }
     tmp.blocks.push_back(block);
   }

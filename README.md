@@ -21,6 +21,11 @@ DCON is a minimal Bitcoin-like cryptocurrency in C++ with UTXO transactions, Pro
 - Most-work chain selection
 - Version/verack handshake + inv/getdata inventory
 - Headers-first sync (getheaders/headers)
+- Fee-based mempool acceptance and mining (min relay fee per KB)
+- Fee estimation from recent blocks (`estimatefee`)
+- Mempool size limit with fee-based eviction
+- Basic peer banning on invalid data
+- Compact block announcements (header + txids)
 
 ## Requirements
 
@@ -73,7 +78,9 @@ cmake -S . -B build -DOPENSSL_ROOT_DIR=/opt/homebrew/opt/openssl@3
 ./build/dcon createblockchain -address <YOUR_ADDRESS>
 ./build/dcon getbalance -address <YOUR_ADDRESS>
 ./build/dcon txhistory -address <YOUR_ADDRESS>
-./build/dcon send -from <FROM_ADDR> -to <TO_ADDR> -amount 10
+./build/dcon send -from <FROM_ADDR> -to <TO_ADDR> -amount 10 -fee auto
+./build/dcon send -from <FROM_ADDR> -to <TO_ADDR> -amount 10 -feerate 5
+./build/dcon estimatefee -blocks 10
 ./build/dcon mineblocks -address <YOUR_ADDRESS> -count 101
 ./build/dcon printchain
 ```
@@ -148,7 +155,7 @@ For local testing, add `-announce 127.0.0.1:<PORT>` so peers can request data ba
 Broadcast a transaction to peers (without local mining):
 
 ```bash
-./build/dcon send -from <FROM_ADDR> -to <TO_ADDR> -amount 5 -mine false -peers 127.0.0.1:3001 -datadir data/node1
+./build/dcon send -from <FROM_ADDR> -to <TO_ADDR> -amount 5 -fee auto -mine false -peers 127.0.0.1:3001 -datadir data/node1
 ```
 
 A node started with `-miner` will continuously mine blocks (including empty blocks when the mempool is empty) and broadcast inventory to peers.
@@ -213,12 +220,14 @@ The wallet UI also supports importing/exporting wallet files (PEM) and viewing t
 ## Notes and limitations
 
 - This is a minimal prototype, not production-ready.
-- P2P is basic: simplified peer discovery and no mempool policies.
+- P2P is basic: simplified addrman scoring and no advanced mempool policies.
 - Difficulty retargets every 2016 blocks using timestamps (clamped to 4x); target spacing is 10 minutes.
 - Coinbase rewards mature after 100 blocks; subsidy halves every 210,000 blocks.
 - If you upgrade from an older version, you may need to delete `dcon.db` because the block format changed.
-- P2P is still simplified compared to Bitcoin Core (custom wire format, no addrman scoring).
- - Use `mineblocks -count 101` to unlock coinbase funds for spending.
+- P2P is still simplified compared to Bitcoin Core (custom wire format, no full addrman buckets).
+- Use `mineblocks -count 101` to unlock coinbase funds for spending.
+- Transactions must meet the minimum relay fee (`kMinRelayFeePerKb`) to enter the mempool.
+- The mempool has a size cap (`kMaxMempoolBytes`) and will evict low-fee transactions.
 
 ## Files created at runtime
 
