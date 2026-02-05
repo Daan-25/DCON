@@ -40,6 +40,7 @@ class Node {
   std::string announceAddress;
   int listenPort = 0;
   uint64_t bestTotalWork = 0;
+  int syncIntervalMs = 1000;
 
   bool LoadChain();
   void Serve(int port);

@@ -29,7 +29,7 @@ static void PrintUsage() {
   std::cout << "  estimatefee [-blocks N]\n";
   std::cout << "  mineblocks -address ADDRESS [-count N] [-peers host:port,...]\n";
   std::cout << "  startnode -port PORT [-peers host:port,...] [-seeds host[:port],...] "
-               "[-announce host:port] [-miner ADDRESS]\n";
+               "[-announce host:port] [-miner ADDRESS] [-syncinterval MS]\n";
   std::cout << "  printchain\n";
 }
 
@@ -441,6 +441,7 @@ int main(int argc, char** argv) {
     std::string seedsArg = GetArgValue(argc, argv, "-seeds");
     std::string announceArg = GetArgValue(argc, argv, "-announce");
     std::string miner = GetArgValue(argc, argv, "-miner");
+    std::string syncIntervalStr = GetArgValue(argc, argv, "-syncinterval");
     if (portStr.empty()) {
       std::cerr << "-port is required\n";
       return 1;
@@ -451,6 +452,12 @@ int main(int argc, char** argv) {
     node.seeds = SplitList(seedsArg);
     node.announceAddress = announceArg;
     node.minerAddress = miner;
+    if (!syncIntervalStr.empty()) {
+      int interval = std::stoi(syncIntervalStr);
+      if (interval >= 100) {
+        node.syncIntervalMs = interval;
+      }
+    }
     if (!node.LoadChain()) {
       std::cerr << "Blockchain not found. Create it first.\n";
       return 1;

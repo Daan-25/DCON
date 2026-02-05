@@ -745,9 +745,12 @@ void Node::RequestPeers() {
 }
 
 void Node::SyncLoop() {
-  using namespace std::chrono_literals;
+  int interval = syncIntervalMs;
+  if (interval < 500) {
+    interval = 500;
+  }
   while (true) {
-    std::this_thread::sleep_for(10s);
+    std::this_thread::sleep_for(std::chrono::milliseconds(interval));
     RequestHeaders();
     RequestPeers();
   }
