@@ -22,6 +22,7 @@ Bytes Block::Serialize() const {
   w.WriteI64(nonce);
   w.WriteI64(targetBits);
   w.WriteBytes(prevBlockHash);
+  w.WriteBytes(merkleRoot);
   w.WriteBytes(hash);
 
   w.WriteU32(static_cast<uint32_t>(transactions.size()));
@@ -30,6 +31,18 @@ Bytes Block::Serialize() const {
     w.WriteBytes(tbytes);
   }
 
+  return w.data;
+}
+
+Bytes Block::SerializeHeader() const {
+  ByteWriter w;
+  w.WriteI64(timestamp);
+  w.WriteI64(height);
+  w.WriteI64(nonce);
+  w.WriteI64(targetBits);
+  w.WriteBytes(prevBlockHash);
+  w.WriteBytes(merkleRoot);
+  w.WriteBytes(hash);
   return w.data;
 }
 
@@ -45,6 +58,7 @@ Block Block::Deserialize(const Bytes& data) {
   r.ReadI64(bits);
   b.targetBits = static_cast<int>(bits);
   r.ReadBytes(b.prevBlockHash);
+  r.ReadBytes(b.merkleRoot);
   r.ReadBytes(b.hash);
 
   uint32_t txCount = 0;
@@ -60,6 +74,23 @@ Block Block::Deserialize(const Bytes& data) {
   return b;
 }
 
+Block Block::DeserializeHeader(const Bytes& data) {
+  ByteReader r{data};
+  Block b;
+  r.ReadI64(b.timestamp);
+  int64_t height = 0;
+  r.ReadI64(height);
+  b.height = static_cast<int>(height);
+  r.ReadI64(b.nonce);
+  int64_t bits = 0;
+  r.ReadI64(bits);
+  b.targetBits = static_cast<int>(bits);
+  r.ReadBytes(b.prevBlockHash);
+  r.ReadBytes(b.merkleRoot);
+  r.ReadBytes(b.hash);
+  return b;
+}
+
 Block NewBlock(const std::vector<Transaction>& txs, const Bytes& prevHash,
                int height, int targetBits) {
   Block b;
@@ -68,9 +99,42 @@ Block NewBlock(const std::vector<Transaction>& txs, const Bytes& prevHash,
   b.prevBlockHash = prevHash;
   b.height = height;
   b.targetBits = targetBits;
+  b.merkleRoot = b.HashTransactions();
   ProofOfWork pow(&b);
   pow.Run();
   return b;
+}
+
+bool ValidateHeader(const Block& header, const Block* prev) {
+  if (header.targetBits < kMinTargetBits || header.targetBits > kMaxTargetBits) {
+    return false;
+  }
+  if (prev) {
+    if (header.height != prev->height + 1) {
+      return false;
+    }
+    if (header.prevBlockHash != prev->hash) {
+      return false;
+    }
+  } else {
+    if (header.height != 0) {
+      return false;
+    }
+    if (!header.prevBlockHash.empty()) {
+      return false;
+    }
+  }
+  if (header.targetBits <= 0) {
+    return false;
+  }
+  if (header.merkleRoot.empty()) {
+    return false;
+  }
+  Bytes computed = Sha256(PreparePowData(header, header.nonce));
+  if (computed != header.hash) {
+    return false;
+  }
+  return IsPowHashValid(computed, header.targetBits);
 }
 
 bool ValidateBlock(const Block& block, const Block* prev) {
@@ -88,31 +152,12 @@ bool ValidateBlock(const Block& block, const Block* prev) {
       return false;
     }
   }
-  if (block.targetBits < kMinTargetBits || block.targetBits > kMaxTargetBits) {
+  if (!ValidateHeader(block, prev)) {
     return false;
   }
-  if (prev) {
-    if (block.height != prev->height + 1) {
-      return false;
-    }
-    if (block.prevBlockHash != prev->hash) {
-      return false;
-    }
-  } else {
-    if (block.height != 0) {
-      return false;
-    }
-    if (!block.prevBlockHash.empty()) {
-      return false;
-    }
-  }
-
-  if (block.targetBits <= 0) {
+  Bytes computedMerkle = block.HashTransactions();
+  if (computedMerkle != block.merkleRoot) {
     return false;
   }
-  Bytes computed = Sha256(PreparePowData(block, block.nonce));
-  if (computed != block.hash) {
-    return false;
-  }
-  return IsPowHashValid(computed, block.targetBits);
+  return true;
 }

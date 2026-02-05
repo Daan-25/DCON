@@ -11,6 +11,12 @@ inline constexpr int kTargetSpacingSeconds = 600;
 inline constexpr int kCoinbaseMaturity = 100;
 inline constexpr int kHalvingInterval = 210000;
 inline constexpr size_t kMaxBlockBytes = 1000000;
+inline constexpr size_t kMaxAddrPerMessage = 1000;
+inline constexpr size_t kMaxKnownPeers = 5000;
+inline constexpr size_t kMaxOutboundPeers = 8;
+inline constexpr size_t kMaxHeadersPerMessage = 2000;
+inline constexpr size_t kMaxInvPerMessage = 50000;
+inline constexpr int kProtocolVersion = 1;
 inline constexpr int64_t kInitialSubsidy = 50;
 inline int64_t BlockSubsidy(int height) {
   if (height < 0) {

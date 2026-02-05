@@ -26,6 +26,9 @@ SocketHandle ConnectToPeer(const std::string& address);
 SocketHandle CreateServerSocket(int port);
 
 std::vector<std::string> SplitList(const std::string& list);
+std::vector<std::string> ResolveSeedPeers(const std::string& seed,
+                                          int defaultPort,
+                                          size_t maxResults);
 void BroadcastToPeers(const std::vector<std::string>& peers,
                       const std::string& type,
                       const Bytes& payload);

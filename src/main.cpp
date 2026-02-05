@@ -23,7 +23,8 @@ static void PrintUsage() {
   std::cout << "  getbalance -address ADDRESS\n";
   std::cout << "  txhistory -address ADDRESS\n";
   std::cout << "  send -from FROM -to TO -amount N [-mine true|false] [-peers host:port,...]\n";
-  std::cout << "  startnode -port PORT [-peers host:port,...] [-miner ADDRESS]\n";
+  std::cout << "  startnode -port PORT [-peers host:port,...] [-seeds host[:port],...] "
+               "[-announce host:port] [-miner ADDRESS]\n";
   std::cout << "  printchain\n";
 }
 
@@ -314,6 +315,8 @@ int main(int argc, char** argv) {
   if (command == "startnode") {
     std::string portStr = GetArgValue(argc, argv, "-port");
     std::string peersArg = GetArgValue(argc, argv, "-peers");
+    std::string seedsArg = GetArgValue(argc, argv, "-seeds");
+    std::string announceArg = GetArgValue(argc, argv, "-announce");
     std::string miner = GetArgValue(argc, argv, "-miner");
     if (portStr.empty()) {
       std::cerr << "-port is required\n";
@@ -321,7 +324,9 @@ int main(int argc, char** argv) {
     }
     int port = std::stoi(portStr);
     Node node;
-    node.peers = SplitList(peersArg);
+    node.bootstrapPeers = SplitList(peersArg);
+    node.seeds = SplitList(seedsArg);
+    node.announceAddress = announceArg;
     node.minerAddress = miner;
     if (!node.LoadChain()) {
       std::cerr << "Blockchain not found. Create it first.\n";

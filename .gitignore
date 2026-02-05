@@ -4,6 +4,7 @@
 # data files
 /dcon.db
 /wallets.dat
+/peers.dat
 
 # build artifacts
 /build/

@@ -23,8 +23,8 @@ bool IsPowHashValid(const Bytes& hash, int targetBits) {
 Bytes PreparePowData(const Block& block, int64_t nonce) {
   Bytes data;
   data.insert(data.end(), block.prevBlockHash.begin(), block.prevBlockHash.end());
-  Bytes txHash = block.HashTransactions();
-  data.insert(data.end(), txHash.begin(), txHash.end());
+  Bytes root = block.merkleRoot.empty() ? block.HashTransactions() : block.merkleRoot;
+  data.insert(data.end(), root.begin(), root.end());
 
   auto appendI64 = [&data](int64_t v) {
     uint64_t uv = static_cast<uint64_t>(v);

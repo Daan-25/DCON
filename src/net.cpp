@@ -10,6 +10,7 @@
 #endif
 
 #include <cstring>
+#include <unordered_set>
 
 #include "dcon/serialize.h"
 
@@ -121,27 +122,49 @@ bool ReceiveMessage(SocketHandle fd, std::string& type, Bytes& payload) {
   return ReadBytesFromSocket(fd, payload, payloadLen);
 }
 
-static bool SplitHostPort(const std::string& input, std::string& host, int& port) {
+static bool ParseHostPort(const std::string& input, std::string& host, int& port,
+                          int defaultPort) {
+  if (input.empty()) {
+    return false;
+  }
+  if (input.front() == '[') {
+    size_t end = input.find(']');
+    if (end == std::string::npos) {
+      return false;
+    }
+    host = input.substr(1, end - 1);
+    if (end + 1 < input.size() && input[end + 1] == ':') {
+      try {
+        port = std::stoi(input.substr(end + 2));
+      } catch (...) {
+        return false;
+      }
+    } else {
+      port = defaultPort;
+    }
+    return port > 0;
+  }
+
   size_t pos = input.rfind(':');
-  if (pos == std::string::npos) {
-    return false;
+  if (pos != std::string::npos && input.find(':') == pos) {
+    host = input.substr(0, pos);
+    try {
+      port = std::stoi(input.substr(pos + 1));
+    } catch (...) {
+      return false;
+    }
+    return port > 0;
   }
-  host = input.substr(0, pos);
-  if (host.empty()) {
-    host = "127.0.0.1";
-  }
-  try {
-    port = std::stoi(input.substr(pos + 1));
-  } catch (...) {
-    return false;
-  }
+
+  host = input;
+  port = defaultPort;
   return port > 0;
 }
 
 SocketHandle ConnectToPeer(const std::string& address) {
   std::string host;
   int port = 0;
-  if (!SplitHostPort(address, host, port)) {
+  if (!ParseHostPort(address, host, port, 0)) {
     return static_cast<SocketHandle>(-1);
   }
 
@@ -216,6 +239,64 @@ std::vector<std::string> SplitList(const std::string& list) {
   if (!current.empty()) {
     out.push_back(current);
   }
+  return out;
+}
+
+std::vector<std::string> ResolveSeedPeers(const std::string& seed,
+                                          int defaultPort,
+                                          size_t maxResults) {
+  std::string host;
+  int port = 0;
+  if (!ParseHostPort(seed, host, port, defaultPort)) {
+    return {};
+  }
+
+  struct addrinfo hints {};
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+
+  struct addrinfo* res = nullptr;
+  std::string portStr = std::to_string(port);
+  if (getaddrinfo(host.c_str(), portStr.c_str(), &hints, &res) != 0) {
+    return {};
+  }
+
+  std::vector<std::string> out;
+  std::unordered_set<std::string> seen;
+  for (struct addrinfo* p = res; p != nullptr; p = p->ai_next) {
+    if (out.size() >= maxResults) {
+      break;
+    }
+    char buf[INET6_ADDRSTRLEN] = {};
+    void* addr = nullptr;
+    if (p->ai_family == AF_INET) {
+      sockaddr_in* ipv4 = reinterpret_cast<sockaddr_in*>(p->ai_addr);
+      addr = &(ipv4->sin_addr);
+    } else if (p->ai_family == AF_INET6) {
+      sockaddr_in6* ipv6 = reinterpret_cast<sockaddr_in6*>(p->ai_addr);
+      addr = &(ipv6->sin6_addr);
+    } else {
+      continue;
+    }
+    if (!inet_ntop(p->ai_family, addr, buf, sizeof(buf))) {
+      continue;
+    }
+    std::string ip = buf;
+    if (ip.empty()) {
+      continue;
+    }
+    std::string peer;
+    if (p->ai_family == AF_INET6) {
+      peer = "[" + ip + "]:" + std::to_string(port);
+    } else {
+      peer = ip + ":" + std::to_string(port);
+    }
+    if (seen.insert(peer).second) {
+      out.push_back(peer);
+    }
+  }
+
+  freeaddrinfo(res);
   return out;
 }
 

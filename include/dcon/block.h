@@ -11,16 +11,20 @@ struct Block {
   std::vector<Transaction> transactions;
   Bytes prevBlockHash;
   Bytes hash;
+  Bytes merkleRoot;
   int64_t nonce = 0;
   int height = 0;
   int targetBits = 0;
 
   Bytes HashTransactions() const;
   Bytes Serialize() const;
+  Bytes SerializeHeader() const;
   static Block Deserialize(const Bytes& data);
+  static Block DeserializeHeader(const Bytes& data);
 };
 
 Block NewBlock(const std::vector<Transaction>& txs, const Bytes& prevHash,
                int height, int targetBits);
 
 bool ValidateBlock(const Block& block, const Block* prev);
+bool ValidateHeader(const Block& header, const Block* prev);

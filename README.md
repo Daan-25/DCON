@@ -12,12 +12,15 @@ DCON is a minimal Bitcoin-like cryptocurrency in C++ with UTXO transactions, Pro
 - Wallet import/export (PEM)
 - Transaction history (CLI + UI)
 - Simple P2P gossip for blocks and transactions
+- DNS seed resolution + addr/getaddr peer discovery (Bitcoin-style)
 - In-memory mempool for pending transactions
 - Qt desktop wallet UI
 - Coinbase maturity (100 blocks)
 - Block subsidy halving every 210,000 blocks
 - 1 MB max block size
 - Most-work chain selection
+- Version/verack handshake + inv/getdata inventory
+- Headers-first sync (getheaders/headers)
 
 ## Requirements
 
@@ -130,6 +133,17 @@ cp data/node1/dcon.db data/node3/dcon.db
 ./build/dcon startnode -port 3003 -peers 127.0.0.1:3001,127.0.0.1:3002 -datadir data/node3
 ```
 
+You can also use DNS seeds (Bitcoin-style) and addr/getaddr gossip:
+
+```bash
+./build/dcon startnode -port 3001 -seeds seed1.example.com:3001,seed2.example.com:3001 -announce 203.0.113.5:3001
+```
+
+Nodes announce themselves via `version` (`-announce` recommended) and exchange inventory with
+`inv/getdata`. Initial sync uses headers-first (`getheaders/headers`).
+
+For local testing, add `-announce 127.0.0.1:<PORT>` so peers can request data back.
+
 Broadcast a transaction to peers (without local mining):
 
 ```bash
@@ -202,11 +216,13 @@ The wallet UI also supports importing/exporting wallet files (PEM) and viewing t
 - Difficulty retargets every 2016 blocks using timestamps (clamped to 4x); target spacing is 10 minutes.
 - Coinbase rewards mature after 100 blocks; subsidy halves every 210,000 blocks.
 - If you upgrade from an older version, you may need to delete `dcon.db` because the block format changed.
+- P2P is still simplified compared to Bitcoin Core (custom wire format, no addrman scoring).
 
 ## Files created at runtime
 
 - `dcon.db` — blockchain data
 - `wallets.dat` — local wallets
+- `peers.dat` — cached peer addresses
 
 These files are ignored by `.gitignore` and should not be committed.
 

@@ -5,6 +5,7 @@
 
 static std::string gDbFile = "dcon.db";
 static std::string gWalletFile = "wallets.dat";
+static std::string gPeersFile = "peers.dat";
 
 void SetDataDir(const std::string& dir) {
   if (dir.empty()) {
@@ -14,9 +15,11 @@ void SetDataDir(const std::string& dir) {
   if (dir.back() == '/') {
     gDbFile = dir + "dcon.db";
     gWalletFile = dir + "wallets.dat";
+    gPeersFile = dir + "peers.dat";
   } else {
     gDbFile = dir + "/dcon.db";
     gWalletFile = dir + "/wallets.dat";
+    gPeersFile = dir + "/peers.dat";
   }
 }
 
@@ -26,6 +29,10 @@ const std::string& DbFile() {
 
 const std::string& WalletFile() {
   return gWalletFile;
+}
+
+const std::string& PeersFile() {
+  return gPeersFile;
 }
 
 bool FileExists(const std::string& path) {
