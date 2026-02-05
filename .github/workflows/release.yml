@@ -1,11 +1,15 @@
-name: CI
+name: Release
 
 on:
   push:
-  pull_request:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
 
 jobs:
-  build:
+  build-release:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -47,6 +51,7 @@ jobs:
       - name: Build (Linux)
         if: runner.os == 'Linux'
         run: cmake --build build --config Release
+
       - name: Package (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -54,12 +59,6 @@ jobs:
           mkdir -p dist
           cp build/dcon dist/
           tar -czf "dcon-linux-${arch}.tar.gz" -C dist .
-      - name: Upload artifact (Linux)
-        if: runner.os == 'Linux'
-        uses: actions/upload-artifact@v4
-        with:
-          name: dcon-linux
-          path: dcon-linux-*.tar.gz
 
       - name: Configure (macOS)
         if: runner.os == 'macOS'
@@ -70,6 +69,7 @@ jobs:
       - name: Build (macOS)
         if: runner.os == 'macOS'
         run: cmake --build build --config Release
+
       - name: Package (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -77,12 +77,6 @@ jobs:
           mkdir -p dist
           cp build/dcon dist/
           tar -czf "dcon-macos-${arch}.tar.gz" -C dist .
-      - name: Upload artifact (macOS)
-        if: runner.os == 'macOS'
-        uses: actions/upload-artifact@v4
-        with:
-          name: dcon-macos
-          path: dcon-macos-*.tar.gz
 
       - name: Configure (Windows MSYS2)
         if: runner.os == 'Windows'
@@ -93,6 +87,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: cmake --build build --config Release
+
       - name: Package (Windows MSYS2)
         if: runner.os == 'Windows'
         shell: msys2 {0}
@@ -104,9 +99,11 @@ jobs:
             cp "$f" dist/
           done
           tar -czf dcon-windows-x86_64.tar.gz -C dist .
-      - name: Upload artifact (Windows)
-        if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
         with:
-          name: dcon-windows
-          path: dcon-windows-x86_64.tar.gz
+          files: |
+            dcon-linux-*.tar.gz
+            dcon-macos-*.tar.gz
+            dcon-windows-x86_64.tar.gz
