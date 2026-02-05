@@ -67,6 +67,7 @@ class Node {
   void RequestBlocks();
   void RequestHeaders();
   void RequestPeers();
+  void SyncLoop();
   void OnAddr(const Bytes& payload);
   void OnHeaders(const Bytes& payload, int client, const std::string& peerAddr);
   void OnGetHeaders(const Bytes& payload, int client);

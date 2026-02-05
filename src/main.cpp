@@ -1,4 +1,5 @@
 #include <iostream>
+#include <csignal>
 #include <string>
 
 #include "dcon/blockchain.h"
@@ -102,6 +103,9 @@ int main(int argc, char** argv) {
     std::cerr << "Failed to initialize sockets\n";
     return 1;
   }
+#ifndef _WIN32
+  std::signal(SIGPIPE, SIG_IGN);
+#endif
   struct SocketGuard {
     ~SocketGuard() { ShutdownSockets(); }
   } socketGuard;

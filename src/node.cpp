@@ -554,8 +554,10 @@ void Node::RequestFromPeer(const std::string& peer, const std::string& type,
   }
   SetSocketTimeoutMs(sock, 5000);
   Bytes version = BuildVersionPayload(*this);
-  SendMessage(sock, "version", version);
-  SendMessage(sock, type, payload);
+  if (!SendMessage(sock, "version", version) || !SendMessage(sock, type, payload)) {
+    CloseSocket(sock);
+    return;
+  }
 
   bool success = false;
   std::string rtype;
@@ -570,7 +572,12 @@ void Node::RequestFromPeer(const std::string& peer, const std::string& type,
       }
       success = true;
     }
-    HandleMessage(rtype, rpayload, sock, peer);
+    try {
+      HandleMessage(rtype, rpayload, sock, peer);
+    } catch (const std::exception& e) {
+      std::cerr << "Peer message error: " << e.what() << "\n";
+      break;
+    }
   }
   CloseSocket(sock);
 }
@@ -734,6 +741,15 @@ void Node::RequestPeers() {
   }
   for (const auto& peer : snapshot) {
     RequestFromPeer(peer, "getaddr", empty);
+  }
+}
+
+void Node::SyncLoop() {
+  using namespace std::chrono_literals;
+  while (true) {
+    std::this_thread::sleep_for(10s);
+    RequestHeaders();
+    RequestPeers();
   }
 }
 
@@ -1747,6 +1763,7 @@ void Node::Serve(int port) {
   std::cout << "Node listening on port " << port << "\n";
   RequestHeaders();
   RequestPeers();
+  std::thread([this]() { SyncLoop(); }).detach();
   if (!minerAddress.empty()) {
     std::thread([this]() { MiningLoop(); }).detach();
   }
@@ -1763,32 +1780,36 @@ void Node::Serve(int port) {
       continue;
     }
     std::thread([this, client]() {
-      std::string type;
-      Bytes payload;
-      std::string peerAddr;
-      if (ReceiveMessage(client, type, payload)) {
-        if (type == "version") {
-          VersionInfo info;
-          if (ParseVersionPayload(payload, info)) {
-            peerAddr = info.addrFrom;
-            if (!peerAddr.empty()) {
-              std::lock_guard<std::mutex> lock(mutex);
-              AddKnownPeer(peerAddr, info.timestamp);
-              MarkPeerSuccess(peerAddr);
-              SavePeersFile();
-              SelectOutboundPeers();
+      try {
+        std::string type;
+        Bytes payload;
+        std::string peerAddr;
+        if (ReceiveMessage(client, type, payload)) {
+          if (type == "version") {
+            VersionInfo info;
+            if (ParseVersionPayload(payload, info)) {
+              peerAddr = info.addrFrom;
+              if (!peerAddr.empty()) {
+                std::lock_guard<std::mutex> lock(mutex);
+                AddKnownPeer(peerAddr, info.timestamp);
+                MarkPeerSuccess(peerAddr);
+                SavePeersFile();
+                SelectOutboundPeers();
+              }
             }
+            Bytes empty;
+            SendMessage(client, "verack", empty);
+            std::string nextType;
+            Bytes nextPayload;
+            if (ReceiveMessage(client, nextType, nextPayload)) {
+              HandleMessage(nextType, nextPayload, client, peerAddr);
+            }
+          } else {
+            HandleMessage(type, payload, client, peerAddr);
           }
-          Bytes empty;
-          SendMessage(client, "verack", empty);
-          std::string nextType;
-          Bytes nextPayload;
-          if (ReceiveMessage(client, nextType, nextPayload)) {
-            HandleMessage(nextType, nextPayload, client, peerAddr);
-          }
-        } else {
-          HandleMessage(type, payload, client, peerAddr);
         }
+      } catch (const std::exception& e) {
+        std::cerr << "Peer handler error: " << e.what() << "\n";
       }
       CloseSocket(client);
     }).detach();
