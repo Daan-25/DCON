@@ -24,6 +24,10 @@ inline constexpr int64_t kPeerStaleSeconds = 30LL * 24 * 60 * 60;
 inline constexpr int64_t kPeerFailWindowSeconds = 10LL * 60;
 inline constexpr int kPeerMaxFailures = 5;
 inline constexpr int64_t kBanSeconds = 24LL * 60 * 60;
+inline constexpr int64_t kPeerActiveWindowSeconds = 20;
+inline constexpr int64_t kPeerPingIntervalSeconds = 5;
+inline constexpr int64_t kPeerAddrRefreshSeconds = 30;
+inline constexpr int64_t kPeerHeadersRefreshSeconds = 2;
 inline constexpr int64_t kInitialSubsidy = 50;
 inline int64_t BlockSubsidy(int height) {
   if (height < 0) {

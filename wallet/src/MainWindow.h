@@ -72,12 +72,12 @@ class MainWindow : public QMainWindow {
   QTimer* peerStatusTimer;
   QTableWidget* peersTable;
   QSet<QString> knownPeers;
+  bool peerRefreshInFlight = false;
 
   void appendLog(const QString& text);
   QString dconPath() const;
   QString dataDir() const;
   bool ensureDconPath();
-  QString peersFilePath() const;
   QString chainFilePath() const;
   int readChainHeight() const;
   void refreshPeerStatus();

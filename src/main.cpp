@@ -1,6 +1,14 @@
 #include <iostream>
 #include <csignal>
 #include <string>
+#include <ctime>
+#include <vector>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#else
+#include <sys/socket.h>
+#endif
 
 #include "dcon/blockchain.h"
 #include "dcon/base58.h"
@@ -9,9 +17,113 @@
 #include "dcon/net.h"
 #include "dcon/node.h"
 #include "dcon/pow.h"
+#include "dcon/serialize.h"
 #include "dcon/storage.h"
 #include "dcon/transaction.h"
 #include "dcon/wallet.h"
+
+static bool IsValidSocket(SocketHandle socket) {
+#ifdef _WIN32
+  return socket != INVALID_SOCKET;
+#else
+  return socket >= 0;
+#endif
+}
+
+static void SetSocketTimeoutMs(SocketHandle socket, int ms) {
+#ifdef _WIN32
+  DWORD timeout = static_cast<DWORD>(ms);
+  setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout),
+             sizeof(timeout));
+#else
+  timeval tv {};
+  tv.tv_sec = ms / 1000;
+  tv.tv_usec = (ms % 1000) * 1000;
+  setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+#endif
+}
+
+struct NodeStatusPeer {
+  std::string address;
+  int64_t lastSeen = 0;
+  int64_t lastSuccess = 0;
+  int64_t attempts = 0;
+};
+
+static Bytes BuildClientVersionPayload() {
+  ByteWriter w;
+  w.WriteU32(static_cast<uint32_t>(kProtocolVersion));
+  w.WriteI64(static_cast<int64_t>(std::time(nullptr)));
+  w.WriteI64(-1);
+  w.WriteString("");
+  w.WriteString("dcon-cli/0.2");
+  return w.data;
+}
+
+static bool ParseNodeInfoPayload(const Bytes& payload,
+                                 int64_t& height,
+                                 std::vector<NodeStatusPeer>& peers) {
+  ByteReader r{payload};
+  if (!r.ReadI64(height)) {
+    return false;
+  }
+  uint32_t count = 0;
+  if (!r.ReadU32(count)) {
+    return false;
+  }
+  if (count > kMaxKnownPeers) {
+    return false;
+  }
+  peers.clear();
+  peers.reserve(count);
+  for (uint32_t i = 0; i < count; ++i) {
+    NodeStatusPeer peer;
+    if (!r.ReadString(peer.address)) {
+      return false;
+    }
+    if (!r.ReadI64(peer.lastSeen)) {
+      return false;
+    }
+    if (!r.ReadI64(peer.lastSuccess)) {
+      return false;
+    }
+    if (!r.ReadI64(peer.attempts)) {
+      return false;
+    }
+    peers.push_back(peer);
+  }
+  return true;
+}
+
+static bool QueryNodeStatus(const std::string& peerAddr,
+                            int64_t& height,
+                            std::vector<NodeStatusPeer>& peers) {
+  height = -1;
+  peers.clear();
+  SocketHandle sock = ConnectToPeer(peerAddr);
+  if (!IsValidSocket(sock)) {
+    return false;
+  }
+  SetSocketTimeoutMs(sock, 2000);
+  Bytes version = BuildClientVersionPayload();
+  if (!SendMessage(sock, "version", version) ||
+      !SendMessage(sock, "getnodeinfo", Bytes{})) {
+    CloseSocket(sock);
+    return false;
+  }
+  std::string type;
+  Bytes payload;
+  while (ReceiveMessage(sock, type, payload)) {
+    if (type != "nodeinfo") {
+      continue;
+    }
+    bool ok = ParseNodeInfoPayload(payload, height, peers);
+    CloseSocket(sock);
+    return ok;
+  }
+  CloseSocket(sock);
+  return false;
+}
 
 static void PrintUsage() {
   std::cout << "DCON - minimal Bitcoin-like chain (C++)\n\n";
@@ -30,6 +142,7 @@ static void PrintUsage() {
   std::cout << "  mineblocks -address ADDRESS [-count N] [-peers host:port,...]\n";
   std::cout << "  startnode -port PORT [-peers host:port,...] [-seeds host[:port],...] "
                "[-announce host:port] [-miner ADDRESS] [-syncinterval MS]\n";
+  std::cout << "  nodestatus [-peer host:port]\n";
   std::cout << "  printchain\n";
 }
 
@@ -463,6 +576,25 @@ int main(int argc, char** argv) {
       return 1;
     }
     node.Serve(port);
+    return 0;
+  }
+
+  if (command == "nodestatus") {
+    std::string peerArg = GetArgValue(argc, argv, "-peer");
+    if (peerArg.empty()) {
+      peerArg = "127.0.0.1:3001";
+    }
+    int64_t height = -1;
+    std::vector<NodeStatusPeer> peers;
+    if (!QueryNodeStatus(peerArg, height, peers)) {
+      std::cout << "NODEINFO|-1|0\n";
+      return 0;
+    }
+    std::cout << "NODEINFO|" << height << "|" << peers.size() << "\n";
+    for (const auto& peer : peers) {
+      std::cout << "PEER|" << peer.address << "|" << peer.lastSeen << "|"
+                << peer.lastSuccess << "|" << peer.attempts << "\n";
+    }
     return 0;
   }
 

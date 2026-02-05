@@ -54,6 +54,7 @@ class Node {
   std::unordered_map<std::string, PeerInfo> peerTable;
   std::unordered_map<std::string, int64_t> bannedUntil;
   std::unordered_set<std::string> pendingBlocks;
+  std::unordered_set<std::string> reachablePeers;
   bool wantMoreHeaders = false;
   std::string bestTip;
 
@@ -68,6 +69,7 @@ class Node {
   void RequestBlocks();
   void RequestHeaders();
   void RequestPeers();
+  void RequestPing();
   void SyncLoop();
   void OnAddr(const Bytes& payload);
   void OnHeaders(const Bytes& payload, int client, const std::string& peerAddr);
@@ -92,6 +94,9 @@ class Node {
   void AddKnownPeers(const std::vector<std::string>& addrs, int64_t lastSeen);
   void MarkPeerAttempt(const std::string& peer);
   void MarkPeerSuccess(const std::string& peer);
+  void MarkPeerDisconnected(const std::string& peer, const std::string& reason);
+  void PruneDisconnectedPeers(int64_t now);
+  Bytes BuildNodeInfoPayload() const;
   bool IsTerriblePeer(const PeerInfo& info, int64_t now) const;
   double PeerScore(const PeerInfo& info, int64_t now) const;
   void SelectOutboundPeers();

@@ -269,6 +269,7 @@ void Node::BanPeer(const std::string& peer, const std::string& reason) {
   }
   int64_t now = static_cast<int64_t>(std::time(nullptr));
   bannedUntil[peer] = now + kBanSeconds;
+  reachablePeers.erase(peer);
   peers.erase(std::remove(peers.begin(), peers.end(), peer), peers.end());
   std::cerr << "Banned peer " << peer << ": " << reason << "\n";
 }
@@ -427,12 +428,80 @@ void Node::MarkPeerSuccess(const std::string& peer) {
   if (peer.empty()) {
     return;
   }
+  bool wasReachable = reachablePeers.find(peer) != reachablePeers.end();
   auto& info = peerTable[peer];
   int64_t now = static_cast<int64_t>(std::time(nullptr));
   info.lastSuccess = now;
   info.lastSeen = now;
   info.attempts = 0;
   info.tried = true;
+  reachablePeers.insert(peer);
+  if (!wasReachable) {
+    std::cout << "Connected to " << peer << "\n";
+  }
+}
+
+void Node::MarkPeerDisconnected(const std::string& peer, const std::string& reason) {
+  if (peer.empty()) {
+    return;
+  }
+  if (reachablePeers.erase(peer) > 0) {
+    if (!reason.empty()) {
+      std::cout << "Disconnected from " << peer << " (" << reason << ")\n";
+    } else {
+      std::cout << "Disconnected from " << peer << "\n";
+    }
+  }
+}
+
+void Node::PruneDisconnectedPeers(int64_t now) {
+  std::vector<std::string> stale;
+  stale.reserve(reachablePeers.size());
+  for (const auto& peer : reachablePeers) {
+    auto it = peerTable.find(peer);
+    if (it == peerTable.end()) {
+      stale.push_back(peer);
+      continue;
+    }
+    if (it->second.lastSuccess <= 0 ||
+        now - it->second.lastSuccess > kPeerActiveWindowSeconds) {
+      stale.push_back(peer);
+    }
+  }
+  for (const auto& peer : stale) {
+    MarkPeerDisconnected(peer, "heartbeat timeout");
+  }
+}
+
+Bytes Node::BuildNodeInfoPayload() const {
+  ByteWriter w;
+  int64_t height = chain.blocks.empty() ? -1 : chain.blocks.back().height;
+  int64_t now = static_cast<int64_t>(std::time(nullptr));
+  std::vector<std::string> active;
+  active.reserve(reachablePeers.size());
+  for (const auto& peer : reachablePeers) {
+    auto it = peerTable.find(peer);
+    if (it == peerTable.end()) {
+      continue;
+    }
+    if (it->second.lastSuccess <= 0 ||
+        now - it->second.lastSuccess > kPeerActiveWindowSeconds) {
+      continue;
+    }
+    active.push_back(peer);
+  }
+  std::sort(active.begin(), active.end());
+
+  w.WriteI64(height);
+  w.WriteU32(static_cast<uint32_t>(active.size()));
+  for (const auto& peer : active) {
+    const auto& info = peerTable.at(peer);
+    w.WriteString(peer);
+    w.WriteI64(info.lastSeen);
+    w.WriteI64(info.lastSuccess);
+    w.WriteI64(static_cast<int64_t>(info.attempts));
+  }
+  return w.data;
 }
 
 bool Node::IsTerriblePeer(const PeerInfo& info, int64_t now) const {
@@ -550,11 +619,17 @@ void Node::RequestFromPeer(const std::string& peer, const std::string& type,
   }
   SocketHandle sock = ConnectToPeer(peer);
   if (!IsValidSocket(sock)) {
+    std::lock_guard<std::mutex> lock(mutex);
+    MarkPeerDisconnected(peer, "connect failed");
     return;
   }
   SetSocketTimeoutMs(sock, 5000);
   Bytes version = BuildVersionPayload(*this);
   if (!SendMessage(sock, "version", version) || !SendMessage(sock, type, payload)) {
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      MarkPeerDisconnected(peer, "send failed");
+    }
     CloseSocket(sock);
     return;
   }
@@ -578,6 +653,10 @@ void Node::RequestFromPeer(const std::string& peer, const std::string& type,
       std::cerr << "Peer message error: " << e.what() << "\n";
       break;
     }
+  }
+  if (!success) {
+    std::lock_guard<std::mutex> lock(mutex);
+    MarkPeerDisconnected(peer, "no response");
   }
   CloseSocket(sock);
 }
@@ -610,6 +689,7 @@ void Node::BuildIndexFromChain() {
   bestTip.clear();
   bestTotalWork = 0;
   pendingBlocks.clear();
+  reachablePeers.clear();
   wantMoreHeaders = false;
 
   uint64_t cumulative = 0;
@@ -744,15 +824,47 @@ void Node::RequestPeers() {
   }
 }
 
+void Node::RequestPing() {
+  ByteWriter w;
+  w.WriteI64(static_cast<int64_t>(std::time(nullptr)));
+  std::vector<std::string> snapshot;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    snapshot = peers;
+  }
+  for (const auto& peer : snapshot) {
+    RequestFromPeer(peer, "ping", w.data);
+  }
+}
+
 void Node::SyncLoop() {
   int interval = syncIntervalMs;
-  if (interval < 500) {
-    interval = 500;
+  if (interval < 250) {
+    interval = 250;
   }
+  int64_t now = static_cast<int64_t>(std::time(nullptr));
+  int64_t nextHeadersAt = now;
+  int64_t nextPeersAt = now;
+  int64_t nextPingAt = now;
   while (true) {
     std::this_thread::sleep_for(std::chrono::milliseconds(interval));
-    RequestHeaders();
-    RequestPeers();
+    now = static_cast<int64_t>(std::time(nullptr));
+    if (now >= nextHeadersAt) {
+      RequestHeaders();
+      nextHeadersAt = now + kPeerHeadersRefreshSeconds;
+    }
+    if (now >= nextPeersAt) {
+      RequestPeers();
+      nextPeersAt = now + kPeerAddrRefreshSeconds;
+    }
+    if (now >= nextPingAt) {
+      RequestPing();
+      nextPingAt = now + kPeerPingIntervalSeconds;
+    }
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      PruneDisconnectedPeers(now);
+    }
   }
 }
 
@@ -1744,6 +1856,15 @@ void Node::HandleMessage(const std::string& type, const Bytes& payload, int clie
   }
   if (type == "ping") {
     OnPing(payload, client);
+    return;
+  }
+  if (type == "getnodeinfo") {
+    Bytes data;
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      data = BuildNodeInfoPayload();
+    }
+    SendMessage(client, "nodeinfo", data);
     return;
   }
   if (type == "pong" || type == "verack") {

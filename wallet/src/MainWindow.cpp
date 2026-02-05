@@ -26,7 +26,6 @@
 #include <QStatusBar>
 #include <QStyle>
 #include <QStyleFactory>
-#include <QTextStream>
 #include <QToolBar>
 #include <QSplitter>
 #include <QTableWidgetItem>
@@ -68,26 +67,6 @@ bool MainWindow::ensureDconPath() {
     return false;
   }
   return true;
-}
-
-QString MainWindow::peersFilePath() const {
-  QString dir = dataDir();
-  if (!dir.isEmpty()) {
-    return QDir(dir).filePath("peers.dat");
-  }
-
-  QString binPath = dconPath();
-  if (!binPath.isEmpty()) {
-    QFileInfo info(binPath);
-    if (info.exists()) {
-      QString candidate = QDir(info.absolutePath()).filePath("peers.dat");
-      if (QFileInfo::exists(candidate)) {
-        return candidate;
-      }
-    }
-  }
-
-  return QDir::currentPath() + "/peers.dat";
 }
 
 QString MainWindow::chainFilePath() const {
@@ -137,32 +116,51 @@ void MainWindow::refreshPeerStatus() {
     return;
   }
   bool running = nodeProcess && nodeProcess->state() != QProcess::NotRunning;
-  QString path = peersFilePath();
-  QFile file(path);
-  if (!file.exists() || !file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+  if (!running) {
     connectionsLabel->setText("Connections: 0");
     connectionsLabel->setToolTip(QString());
     if (peersTable) {
       peersTable->setRowCount(0);
     }
-    if (!running) {
-      knownPeers.clear();
-    }
+    knownPeers.clear();
     refreshChainHeight();
     return;
   }
 
-  QTextStream in(&file);
-  int knownCount = 0;
-  int activeCount = 0;
-  QString lastPeer;
-  QSet<QString> currentPeers;
-  QSet<QString> activePeers;
-  if (peersTable) {
-    peersTable->setRowCount(0);
+  QString port = nodePortEdit ? nodePortEdit->text().trimmed() : QString();
+  if (port.isEmpty() || !ensureDconPath()) {
+    connectionsLabel->setText("Connections: 0");
+    connectionsLabel->setToolTip(QString());
+    if (peersTable) {
+      peersTable->setRowCount(0);
+    }
+    knownPeers.clear();
+    refreshChainHeight();
+    return;
   }
-  qint64 now = QDateTime::currentSecsSinceEpoch();
-  const qint64 activeWindowSeconds = 120;
+
+  if (peerRefreshInFlight) {
+    return;
+  }
+  peerRefreshInFlight = true;
+
+  QProcess process;
+  process.setProgram(dconPath());
+  process.setArguments({"nodestatus", "-peer", QString("127.0.0.1:%1").arg(port)});
+  process.start();
+  if (!process.waitForStarted(500) || !process.waitForFinished(2000)) {
+    process.kill();
+    connectionsLabel->setText("Connections: 0");
+    connectionsLabel->setToolTip("Node status unavailable");
+    if (peersTable) {
+      peersTable->setRowCount(0);
+    }
+    knownPeers.clear();
+    refreshChainHeight();
+    peerRefreshInFlight = false;
+    return;
+  }
+
   auto fmtTs = [](const QString& value) -> QString {
     bool ok = false;
     qint64 ts = value.toLongLong(&ok);
@@ -172,51 +170,50 @@ void MainWindow::refreshPeerStatus() {
     return QDateTime::fromSecsSinceEpoch(ts).toString("yyyy-MM-dd HH:mm:ss");
   };
 
-  while (!in.atEnd()) {
-    QString line = in.readLine().trimmed();
-    if (line.isEmpty()) {
+  int activeCount = 0;
+  int remoteHeight = -1;
+  QSet<QString> activePeers;
+  QStringList lines = QString::fromUtf8(process.readAllStandardOutput())
+                          .split('\n', Qt::SkipEmptyParts);
+  if (peersTable) {
+    peersTable->setRowCount(0);
+  }
+  for (const QString& raw : lines) {
+    QString line = raw.trimmed();
+    if (line.startsWith("NODEINFO|")) {
+      QStringList parts = line.split('|');
+      if (parts.size() >= 3) {
+        remoteHeight = parts[1].toInt();
+        activeCount = parts[2].toInt();
+      }
       continue;
     }
-    QString peer = line.section('|', 0, 0).trimmed();
-    QString lastSeenRaw = line.section('|', 1, 1).trimmed();
-    QString lastSuccessRaw = line.section('|', 2, 2).trimmed();
-    QString lastSeen = fmtTs(lastSeenRaw);
-    QString lastSuccess = fmtTs(lastSuccessRaw);
-    QString attempts = line.section('|', 3, 3).trimmed();
-    if (!peer.isEmpty()) {
-      knownCount++;
-      lastPeer = peer;
-      currentPeers.insert(peer);
-      if (running) {
-        bool ok = false;
-        qint64 lastSuccessTs = lastSuccessRaw.toLongLong(&ok);
-        if (ok && lastSuccessTs > 0 && (now - lastSuccessTs) <= activeWindowSeconds) {
-          activeCount++;
-          activePeers.insert(peer);
-        }
-      }
-      if (peersTable) {
-        int row = peersTable->rowCount();
-        peersTable->insertRow(row);
-        peersTable->setItem(row, 0, new QTableWidgetItem(peer));
-        peersTable->setItem(row, 1, new QTableWidgetItem(lastSeen));
-        peersTable->setItem(row, 2, new QTableWidgetItem(lastSuccess));
-        peersTable->setItem(row, 3, new QTableWidgetItem(attempts));
-      }
+    if (!line.startsWith("PEER|")) {
+      continue;
+    }
+    QStringList parts = line.split('|');
+    if (parts.size() < 5) {
+      continue;
+    }
+    QString peer = parts[1].trimmed();
+    if (peer.isEmpty()) {
+      continue;
+    }
+    activePeers.insert(peer);
+    if (peersTable) {
+      int row = peersTable->rowCount();
+      peersTable->insertRow(row);
+      peersTable->setItem(row, 0, new QTableWidgetItem(peer));
+      peersTable->setItem(row, 1, new QTableWidgetItem(fmtTs(parts[2].trimmed())));
+      peersTable->setItem(row, 2, new QTableWidgetItem(fmtTs(parts[3].trimmed())));
+      peersTable->setItem(row, 3, new QTableWidgetItem(parts[4].trimmed()));
     }
   }
-  if (running) {
-    connectionsLabel->setText(QString("Connections: %1").arg(activeCount));
-  } else {
-    connectionsLabel->setText("Connections: 0");
-  }
-  if (knownCount > 0) {
-    connectionsLabel->setToolTip(QString("Known peers: %1").arg(knownCount));
-  } else {
-    connectionsLabel->setToolTip(QString());
-  }
 
-  if (running && !activePeers.isEmpty()) {
+  connectionsLabel->setText(QString("Connections: %1").arg(activeCount));
+  connectionsLabel->setToolTip(QString("Live status from node on %1").arg(port));
+
+  if (!activePeers.isEmpty()) {
     QStringList newPeers;
     for (const QString& peer : activePeers) {
       if (!knownPeers.contains(peer)) {
@@ -229,10 +226,33 @@ void MainWindow::refreshPeerStatus() {
       appendLog(message);
     }
     knownPeers = activePeers;
-  } else if (!running) {
+  } else {
     knownPeers.clear();
   }
-  refreshChainHeight();
+
+  if (activeCount > 0) {
+    if (syncStatusLabel) {
+      syncStatusLabel->setText("Connected");
+      syncStatusLabel->setStyleSheet("color: #0f6d0f; font-weight: 600;");
+    }
+  } else {
+    if (syncStatusLabel) {
+      syncStatusLabel->setText("Synchronizing with network...");
+      syncStatusLabel->setStyleSheet("color: #b45309; font-weight: 600;");
+    }
+  }
+
+  if (heightLabel) {
+    if (remoteHeight >= 0) {
+      heightLabel->setText(QString("Height: %1").arg(remoteHeight));
+    } else {
+      refreshChainHeight();
+    }
+  } else {
+    refreshChainHeight();
+  }
+
+  peerRefreshInFlight = false;
 }
 
 void MainWindow::refreshChainHeight() {
@@ -1130,6 +1150,7 @@ void MainWindow::updateNodeStatus(bool running) {
   } else {
     nodeStatusLabel->setText("Node: Stopped");
     nodeStatusLabel->setStyleSheet("color: #6b7280; font-weight: 600;");
+    peerRefreshInFlight = false;
     if (syncStatusLabel) {
       syncStatusLabel->setText("Disconnected");
       syncStatusLabel->setStyleSheet("color: #6b7280; font-weight: 600;");
@@ -1152,6 +1173,10 @@ void MainWindow::updateNodeStatus(bool running) {
       connectionsLabel->setText("Connections: 0");
       connectionsLabel->setToolTip(QString());
     }
+    if (peersTable) {
+      peersTable->setRowCount(0);
+    }
+    knownPeers.clear();
   }
   if (startNodeBtn) {
     startNodeBtn->setEnabled(!running);
